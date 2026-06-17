@@ -78,14 +78,18 @@ def renew_certificate(server_name, user_name, notes_password, expiration_days):
 
 if __name__ == "__main__":
     try:
-        params = json.loads(sys.stdin.read())
-        output = renew_certificate(
-            server_name     = params["server_name"],
-            user_name       = params["user_name"],
-            notes_password  = params.get("notes_password", ""),
-            expiration_days = params.get("expiration_days", 365),
-        )
+        raw = sys.stdin.read()
+        if not raw.strip():
+            output = {"success": False, "message": "Воркер не получил параметры (пустой stdin)", "data": {}}
+        else:
+            params = json.loads(raw)
+            output = renew_certificate(
+                server_name     = params["server_name"],
+                user_name       = params["user_name"],
+                notes_password  = params.get("notes_password", ""),
+                expiration_days = params.get("expiration_days", 365),
+            )
     except Exception as e:
         output = {"success": False, "message": f"Ошибка воркера: {e}", "data": {}}
 
-    print(json.dumps(output, ensure_ascii=False))
+    print(json.dumps(output, ensure_ascii=False), flush=True)

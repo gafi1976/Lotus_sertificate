@@ -59,19 +59,32 @@ def call_worker(server_name, user_name, notes_password, expiration_days):
             timeout=60
         )
 
+        # Показываем stderr в любом случае для диагностики
+        stderr_text = proc.stderr.strip() if proc.stderr else ""
+        stdout_text = proc.stdout.strip() if proc.stdout else ""
+
         if proc.returncode != 0:
+            detail = stderr_text or stdout_text or "нет вывода от воркера"
             return {
                 "success": False,
-                "message": f"Воркер завершился с ошибкой (код {proc.returncode}):\n{proc.stderr}",
+                "message": f"Воркер завершился с ошибкой (код {proc.returncode}):\n{detail}",
                 "data": {}
             }
 
-        return json.loads(proc.stdout)
+        if not stdout_text:
+            detail = stderr_text or "воркер не вернул данные"
+            return {
+                "success": False,
+                "message": f"Воркер запустился но ничего не вернул:\n{detail}",
+                "data": {}
+            }
+
+        return json.loads(stdout_text)
 
     except subprocess.TimeoutExpired:
         return {"success": False, "message": "Превышено время ожидания (60 сек). Проверьте подключение к серверу.", "data": {}}
-    except json.JSONDecodeError:
-        return {"success": False, "message": f"Некорректный ответ от воркера:\n{proc.stdout}", "data": {}}
+    except json.JSONDecodeError as e:
+        return {"success": False, "message": f"Некорректный ответ от воркера:\n{proc.stdout}\n{e}", "data": {}}
     except Exception as e:
         return {"success": False, "message": str(e), "data": {}}
 
