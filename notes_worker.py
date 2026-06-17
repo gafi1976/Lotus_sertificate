@@ -65,7 +65,95 @@ def find_user_doc(db, user_name):
     return doc
 
 
-def days_until(date_val):
+def parse_cert_date_from_bytes(raw_bytes):
+    """
+    Парсит дату истечения из бинарных данных сертификата Lotus Notes.
+    Notes хранит дату как 6 байт в формате: YY YY MM DD HH MM
+    (первые 2 байта = год в big-endian, затем месяц, день, часы, минуты)
+    """
+    try:
+        if len(raw_bytes) < 6:
+            return None
+
+        # Ищем валидную дату перебирая смещения в бинарных данных
+        # Notes дата: 2 байта год (big-endian) + 1 байт месяц + 1 байт день
+        for offset in range(0, len(raw_bytes) - 5):
+            try:
+                year  = int.from_bytes(raw_bytes[offset:offset+2], 'big')
+                month = raw_bytes[offset+2]
+                day   = raw_bytes[offset+3]
+
+                # Проверяем что это похоже на дату (год 2020-2040, месяц 1-12, день 1-31)
+                if 2020 <= year <= 2040 and 1 <= month <= 12 and 1 <= day <= 31:
+                    return datetime(year, month, day)
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
+
+
+def get_cert_expiration_from_doc(doc):
+    """
+    Читает дату истечения сертификата из документа пользователя.
+    Пробует разные методы: текстовые поля, бинарные данные сертификата.
+    """
+    # ── Метод 1: стандартные текстовые поля ──────────────────────────────────
+    TEXT_FIELDS = [
+        "CertExpiration", "CertificateExpiration", "Expiration",
+        "CertExp", "HTTPPasswordExpires", "PasswordExpiration",
+    ]
+    for field in TEXT_FIELDS:
+        try:
+            val = doc.GetItemValue(field)
+            if val and val[0] and str(val[0]).strip():
+                v = str(val[0]).strip()
+                if any(c.isdigit() for c in v):
+                    return v, field
+        except Exception:
+            continue
+
+    # ── Метод 2: читаем через Items и смотрим тип данных ─────────────────────
+    try:
+        items = doc.Items
+        for item in items:
+            try:
+                iname = item.Name
+                # Тип 7 = DATETIME в Notes
+                if item.Type == 7:
+                    val = doc.GetItemValue(iname)
+                    if val and val[0]:
+                        iname_lower = iname.lower()
+                        if any(k in iname_lower for k in ("cert", "exp", "valid", "expir")):
+                            return str(val[0]), iname
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    # ── Метод 3: парсим бинарные данные сертификата ───────────────────────────
+    CERT_FIELDS = ["Certificate", "Certificates", "UserCertificate", "Cert"]
+    for field in CERT_FIELDS:
+        try:
+            item = doc.GetFirstItem(field)
+            if item is None:
+                continue
+            # Получаем как текст и конвертируем HEX → bytes
+            val = doc.GetItemValue(field)
+            if val and val[0]:
+                raw_str = str(val[0]).replace(" ", "").replace("\n", "")
+                # Пробуем декодировать как HEX
+                try:
+                    raw_bytes = bytes.fromhex(raw_str)
+                    date = parse_cert_date_from_bytes(raw_bytes)
+                    if date:
+                        return date.strftime("%m/%d/%Y"), f"{field}[binary]"
+                except Exception:
+                    pass
+        except Exception:
+            continue
+
+    return None, None
     """Вычисляет сколько дней осталось до даты. Поддерживает все форматы Notes."""
     try:
         date_str = str(date_val).strip()
@@ -166,65 +254,26 @@ def action_check(win32com, params):
         "full_name":  doc.GetItemValue("FullName")[0],
     }
 
-    # ── Все возможные названия полей даты истечения в разных версиях Notes ────
-    EXP_FIELDS = [
-        "CertExpiration",
-        "CertificateExpiration",
-        "Expiration",
-        "CertExp",
-        "HTTPPasswordExpires",
-        "PasswordExpiration",
-        "certexp",
-        "certexpiration",
-    ]
+    # ── Ищем дату истечения через новый универсальный метод ──────────────────
+    exp_str, exp_field_found = get_cert_expiration_from_doc(doc)
 
-    # ── Все возможные названия полей даты выдачи ──────────────────────────────
-    ISSUED_FIELDS = [
-        "CertIssued",
-        "CertificateIssued",
-        "Issued",
-        "CertDate",
-        "certissued",
-    ]
-
-    # Диагностика — собираем все поля документа содержащие "cert" или "exp"
+    # ── Если не нашли — сканируем все поля для диагностики ───────────────────
     diag_fields = {}
-    try:
-        items = doc.Items
-        for item in items:
-            name = item.Name.lower()
-            if any(k in name for k in ("cert", "exp", "issued", "pass", "date")):
-                try:
-                    val = doc.GetItemValue(item.Name)
-                    if val and val[0]:
-                        diag_fields[item.Name] = str(val[0])
-                except Exception:
-                    pass
-    except Exception:
-        pass
-
-    data["debug_fields"] = diag_fields  # отправляем для диагностики
-
-    # Ищем дату истечения
-    exp_str = None
-    exp_field_found = None
-    for field in EXP_FIELDS:
-        try:
-            val = doc.GetItemValue(field)
-            if val and val[0] and str(val[0]).strip():
-                exp_str = str(val[0])
-                exp_field_found = field
-                break
-        except Exception:
-            continue
-
-    # Если не нашли в известных полях — ищем в diag_fields
     if not exp_str:
-        for fname, fval in diag_fields.items():
-            if any(k in fname.lower() for k in ("exp", "cert")) and fval:
-                exp_str = fval
-                exp_field_found = fname
-                break
+        try:
+            items = doc.Items
+            for item in items:
+                name = item.Name.lower()
+                if any(k in name for k in ("cert", "exp", "issued", "valid", "date")):
+                    try:
+                        val = doc.GetItemValue(item.Name)
+                        if val and val[0]:
+                            diag_fields[item.Name] = str(val[0])[:80]
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        data["debug_fields"] = diag_fields
 
     if exp_str:
         data["expiration_date"] = format_date(exp_str)  # красивый формат дд.мм.гггг
@@ -256,6 +305,7 @@ def action_check(win32com, params):
         )
 
     # Ищем дату выдачи
+    ISSUED_FIELDS = ["CertIssued", "CertificateIssued", "Issued", "CertDate"]
     for field in ISSUED_FIELDS:
         try:
             val = doc.GetItemValue(field)
