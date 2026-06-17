@@ -340,11 +340,12 @@ class LotusRenewApp(tk.Tk):
 
         # Строки статуса
         rows = [
-            ("Пользователь:",  "lbl_fullname"),
-            ("Дата выдачи:",   "lbl_issued"),
-            ("Истекает:",      "lbl_expdate"),
-            ("Статус:",        "lbl_status"),
-            ("Осталось дней:", "lbl_days"),
+            ("Пользователь:",    "lbl_fullname"),
+            ("Дата выдачи:",     "lbl_issued"),
+            ("Истекает:",        "lbl_expdate"),
+            ("Статус:",          "lbl_status"),
+            ("Осталось дней:",   "lbl_days"),
+            ("Последний вход:",  "lbl_lastlogin"),
         ]
         for i, (title, attr) in enumerate(rows):
             tk.Label(self.status_frame, text=title, anchor="w",
@@ -460,10 +461,15 @@ class LotusRenewApp(tk.Tk):
         self.lbl_expdate.config(text=exp, fg="#222222")
 
         days = data.get("days_left")
-        if days is not None:
-            self.lbl_days.config(text=f"{days} дней", fg="#222222")
+        if days_left is not None:
+                    self.lbl_days.config(text=f"{days_left} дней", fg="#222222")
         else:
-            self.lbl_days.config(text="—", fg="gray")
+                    self.lbl_days.config(text="—", fg="gray")
+
+        # Последний вход
+        last = data.get("last_login", "")
+        if hasattr(self, "lbl_lastlogin"):
+            self.lbl_lastlogin.config(text=last if last else "—", fg="#555555")
 
         status     = data.get("status", "unknown")
         status_txt = data.get("status_text", "—")
