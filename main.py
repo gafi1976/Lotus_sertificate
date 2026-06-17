@@ -94,7 +94,7 @@ def find_python32():
 
 # ─── Логика вызова воркера ────────────────────────────────────────────────────
 
-def call_worker(python32_path, server_name, user_name, notes_password, expiration_days):
+def call_worker(python32_path, server_name, user_name, notes_password, expiration_days=365, action="renew"):
     """Запускает notes_worker.py через 32-битный Python и возвращает результат."""
     if not python32_path or not os.path.exists(python32_path):
         return {
@@ -117,6 +117,7 @@ def call_worker(python32_path, server_name, user_name, notes_password, expiratio
         }
 
     params = json.dumps({
+        "action":          action,
         "server_name":     server_name,
         "user_name":       user_name,
         "notes_password":  notes_password,
@@ -317,12 +318,43 @@ class LotusRenewApp(tk.Tk):
         )
         self.btn_run.pack(side="left")
 
+        self.btn_check = tk.Button(
+            btn_frame, text="🔍  Проверить сертификат",
+            command=self._on_check,
+            bg="#28a745", fg="white",
+            font=("Segoe UI", 10, "bold"),
+            relief="flat", cursor="hand2", padx=16, pady=6
+        )
+        self.btn_check.pack(side="left", padx=(8, 0))
+
         tk.Button(
             btn_frame, text="Очистить лог",
             command=self._clear_log,
             font=("Segoe UI", 9), relief="flat",
             cursor="hand2", padx=10, pady=6, bg="#e0e0e0"
         ).pack(side="right")
+
+        # ── Панель статуса сертификата ────────────────────────────────────────
+        self.status_frame = tk.LabelFrame(self, text=" Статус сертификата ", font=("Segoe UI", 9, "bold"), padx=10, pady=8)
+        self.status_frame.pack(fill="x", padx=14, pady=(0, 4))
+
+        # Строки статуса
+        rows = [
+            ("Пользователь:",  "lbl_fullname"),
+            ("Дата выдачи:",   "lbl_issued"),
+            ("Истекает:",      "lbl_expdate"),
+            ("Статус:",        "lbl_status"),
+            ("Осталось дней:", "lbl_days"),
+        ]
+        for i, (title, attr) in enumerate(rows):
+            tk.Label(self.status_frame, text=title, anchor="w",
+                     font=("Segoe UI", 9), width=16).grid(row=i, column=0, sticky="w", pady=2)
+            lbl = tk.Label(self.status_frame, text="—", anchor="w",
+                           font=("Segoe UI", 9, "bold"), fg="gray")
+            lbl.grid(row=i, column=1, sticky="w", padx=(8, 0), pady=2)
+            setattr(self, attr, lbl)
+
+        self.status_frame.columnconfigure(1, weight=1)
 
         # ── Прогресс ──────────────────────────────────────────────────────────
         self.progress = ttk.Progressbar(self, mode="indeterminate")
@@ -377,11 +409,75 @@ class LotusRenewApp(tk.Tk):
         self.log.config(state="disabled")
 
     def _set_busy(self, busy: bool):
-        self.btn_run.config(state="disabled" if busy else "normal")
+        state = "disabled" if busy else "normal"
+        self.btn_run.config(state=state)
+        self.btn_check.config(state=state)
         if busy:
             self.progress.start(12)
         else:
             self.progress.stop()
+
+    # ── Проверка сертификата ──────────────────────────────────────────────────
+
+    def _on_check(self):
+        python32 = self.var_python32.get().strip()
+        server   = self.var_server.get().strip()
+        user     = self.var_user.get().strip()
+        password = self.var_password.get()
+
+        if not python32:
+            messagebox.showerror("Ошибка", "Укажите путь к 32-битному Python")
+            return
+        if not server:
+            messagebox.showerror("Ошибка", "Укажите имя сервера Domino")
+            return
+        if not user:
+            messagebox.showerror("Ошибка", "Укажите имя пользователя")
+            return
+
+        self._save_config()
+        self._set_busy(True)
+        self._log("Проверка сертификата...", "warn")
+        self._log(f"Пользователь : {user}", "info")
+        self._log(f"Сервер       : {server}", "info")
+
+        thread = threading.Thread(
+            target=self._run_worker,
+            args=(python32, server, user, password, 365, "check"),
+            daemon=True
+        )
+        thread.start()
+
+    def _update_status_panel(self, data):
+        """Обновляет панель статуса сертификата."""
+        self.lbl_fullname.config(text=data.get("full_name", "—"), fg="#222222")
+
+        self.lbl_issued.config(
+            text=data.get("issued_date", "Нет данных"), fg="#555555"
+        )
+
+        exp = data.get("expiration_date", "—")
+        self.lbl_expdate.config(text=exp, fg="#222222")
+
+        days = data.get("days_left")
+        if days is not None:
+            self.lbl_days.config(text=f"{days} дней", fg="#222222")
+        else:
+            self.lbl_days.config(text="—", fg="gray")
+
+        status     = data.get("status", "unknown")
+        status_txt = data.get("status_text", "—")
+
+        color_map = {
+            "ok":      "#28a745",   # зелёный
+            "warning": "#e67e00",   # оранжевый
+            "expired": "#dc3545",   # красный
+            "unknown": "#888888",   # серый
+        }
+        self.lbl_status.config(
+            text=status_txt,
+            fg=color_map.get(status, "#888888")
+        )
 
     # ── Запуск продления ─────────────────────────────────────────────────────
 
@@ -422,40 +518,60 @@ class LotusRenewApp(tk.Tk):
 
         thread = threading.Thread(
             target=self._run_worker,
-            args=(python32, server, user, password, days),
+            args=(python32, server, user, password, days, "renew"),
             daemon=True
         )
         thread.start()
 
-    def _run_worker(self, python32, server, user, password, days):
-        result = call_worker(python32, server, user, password, days)
-        self.after(0, self._on_result, result)
+    def _run_worker(self, python32, server, user, password, days, action="renew"):
+        result = call_worker(python32, server, user, password, days, action)
+        self.after(0, self._on_result, result, action)
 
-    def _on_result(self, result):
+    def _on_result(self, result, action="renew"):
         self._set_busy(False)
 
         if result["success"]:
             data = result.get("data", {})
             self._log("─" * 45, "time")
-            self._log("УСПЕШНО: " + result["message"], "success")
-            if "full_name" in data:
-                self._log(f"Пользователь  : {data['full_name']}", "info")
-            if "current_expiration" in data:
-                self._log(f"Было          : {data['current_expiration']}", "info")
-            if "new_expiration" in data:
-                self._log(f"Станет        : {data['new_expiration']}", "success")
-            if "admin_user" in data:
-                self._log(f"Выполнил      : {data['admin_user']}", "info")
-            self._log("AdminP обработает запрос при следующем запуске на сервере.", "warn")
+
+            if action == "check":
+                # ── Результат проверки ────────────────────────────────────────
+                self._update_status_panel(data)
+                status     = data.get("status", "unknown")
+                status_txt = data.get("status_text", "")
+                exp_date   = data.get("expiration_date", "—")
+                days_left  = data.get("days_left")
+
+                tag = "success" if status == "ok" else ("warn" if status == "warning" else "error")
+                self._log(f"Пользователь  : {data.get('full_name', '')}", "info")
+                self._log(f"Истекает      : {exp_date}", "info")
+                if days_left is not None:
+                    self._log(f"Осталось      : {days_left} дней", "info")
+                self._log(f"Статус        : {status_txt}", tag)
+
+            else:
+                # ── Результат продления ───────────────────────────────────────
+                self._log("УСПЕШНО: " + result["message"], "success")
+                if "full_name" in data:
+                    self._log(f"Пользователь  : {data['full_name']}", "info")
+                if "current_expiration" in data:
+                    self._log(f"Было          : {data['current_expiration']}", "info")
+                if "new_expiration" in data:
+                    self._log(f"Станет        : {data['new_expiration']}", "success")
+                if "admin_user" in data:
+                    self._log(f"Выполнил      : {data['admin_user']}", "info")
+                self._log("AdminP обработает запрос при следующем запуске на сервере.", "warn")
+
+                messagebox.showinfo(
+                    "Готово",
+                    f"Запрос на продление создан!\n\n"
+                    f"Пользователь: {data.get('full_name', '')}\n"
+                    f"Новая дата истечения: {data.get('new_expiration', 'н/д')}\n\n"
+                    f"AdminP обработает запрос при следующем запуске."
+                )
+
             self._log("─" * 45, "time")
 
-            messagebox.showinfo(
-                "Готово",
-                f"Запрос на продление создан!\n\n"
-                f"Пользователь: {data.get('full_name', '')}\n"
-                f"Новая дата истечения: {data.get('new_expiration', 'н/д')}\n\n"
-                f"AdminP обработает запрос при следующем запуске."
-            )
         else:
             self._log("─" * 45, "time")
             self._log("ОШИБКА: " + result["message"], "error")
