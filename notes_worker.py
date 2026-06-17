@@ -96,12 +96,12 @@ def parse_cert_date_from_bytes(raw_bytes):
 def get_cert_expiration_from_doc(doc):
     """
     Читает дату истечения сертификата из документа пользователя.
-    Пробует разные методы: текстовые поля, бинарные данные сертификата.
     """
     # ── Метод 1: стандартные текстовые поля ──────────────────────────────────
     TEXT_FIELDS = [
         "CertExpiration", "CertificateExpiration", "Expiration",
         "CertExp", "HTTPPasswordExpires", "PasswordExpiration",
+        "CIntDate", "CertDate", "CertValidUntil", "ValidUntil",
     ]
     for field in TEXT_FIELDS:
         try:
@@ -113,36 +113,29 @@ def get_cert_expiration_from_doc(doc):
         except Exception:
             continue
 
-    # ── Метод 2: читаем через Items и смотрим тип данных ─────────────────────
+    # ── Метод 2: читаем все DATETIME поля (тип 7) ─────────────────────────────
     try:
         items = doc.Items
         for item in items:
             try:
-                iname = item.Name
-                # Тип 7 = DATETIME в Notes
-                if item.Type == 7:
-                    val = doc.GetItemValue(iname)
+                if item.Type == 7:  # DATETIME
+                    val = doc.GetItemValue(item.Name)
                     if val and val[0]:
-                        iname_lower = iname.lower()
-                        if any(k in iname_lower for k in ("cert", "exp", "valid", "expir")):
-                            return str(val[0]), iname
+                        return str(val[0]), item.Name
             except Exception:
                 continue
     except Exception:
         pass
 
-    # ── Метод 3: парсим бинарные данные сертификата ───────────────────────────
-    CERT_FIELDS = ["Certificate", "Certificates", "UserCertificate", "Cert"]
-    for field in CERT_FIELDS:
+    # ── Метод 3: парсим бинарные данные поля Certificate ─────────────────────
+    for field in ["Certificate", "Certificates", "UserCertificate"]:
         try:
             item = doc.GetFirstItem(field)
             if item is None:
                 continue
-            # Получаем как текст и конвертируем HEX → bytes
             val = doc.GetItemValue(field)
             if val and val[0]:
                 raw_str = str(val[0]).replace(" ", "").replace("\n", "")
-                # Пробуем декодировать как HEX
                 try:
                     raw_bytes = bytes.fromhex(raw_str)
                     date = parse_cert_date_from_bytes(raw_bytes)
@@ -257,20 +250,18 @@ def action_check(win32com, params):
     # ── Ищем дату истечения через новый универсальный метод ──────────────────
     exp_str, exp_field_found = get_cert_expiration_from_doc(doc)
 
-    # ── Если не нашли — сканируем все поля для диагностики ───────────────────
+    # ── Если не нашли — сканируем ВСЕ поля документа для диагностики ─────────
     diag_fields = {}
     if not exp_str:
         try:
             items = doc.Items
             for item in items:
-                name = item.Name.lower()
-                if any(k in name for k in ("cert", "exp", "issued", "valid", "date")):
-                    try:
-                        val = doc.GetItemValue(item.Name)
-                        if val and val[0]:
-                            diag_fields[item.Name] = str(val[0])[:80]
-                    except Exception:
-                        pass
+                try:
+                    val = doc.GetItemValue(item.Name)
+                    if val and val[0] and str(val[0]).strip():
+                        diag_fields[item.Name] = f"[тип={item.Type}] {str(val[0])[:60]}"
+                except Exception:
+                    pass
         except Exception:
             pass
         data["debug_fields"] = diag_fields
