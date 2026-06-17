@@ -7,6 +7,14 @@ import os
 import traceback
 from datetime import datetime, timedelta
 
+# Принудительно utf-8 для stdout/stderr чтобы не было проблем с кодировкой Windows
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+if hasattr(sys.stdin, "reconfigure"):
+    sys.stdin.reconfigure(encoding="utf-8")
+
 
 def send(obj):
     """Гарантированно выводим JSON в stdout и завершаем процесс."""

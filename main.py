@@ -55,18 +55,27 @@ def call_worker(server_name, user_name, notes_password, expiration_days):
     }, ensure_ascii=False)
 
     try:
+        # Передаём параметры как байты чтобы избежать проблем с кодировкой Windows
         proc = subprocess.run(
             [PYTHON32_PATH, WORKER_SCRIPT],
-            input=params,
+            input=params.encode("utf-8"),
             capture_output=True,
-            text=True,
-            encoding="utf-8",
             timeout=60
         )
 
-        # Показываем stderr в любом случае для диагностики
-        stderr_text = proc.stderr.strip() if proc.stderr else ""
-        stdout_text = proc.stdout.strip() if proc.stdout else ""
+        # Декодируем вывод — пробуем utf-8, потом cp1251
+        def decode(b):
+            if not b:
+                return ""
+            for enc in ("utf-8", "cp1251", "cp866", "latin-1"):
+                try:
+                    return b.decode(enc).strip()
+                except Exception:
+                    continue
+            return b.decode("utf-8", errors="replace").strip()
+
+        stderr_text = decode(proc.stderr)
+        stdout_text = decode(proc.stdout)
 
         if proc.returncode != 0:
             detail = stderr_text or stdout_text or "нет вывода от воркера"
@@ -80,7 +89,11 @@ def call_worker(server_name, user_name, notes_password, expiration_days):
             detail = stderr_text or "воркер не вернул данные"
             return {
                 "success": False,
-                "message": f"Воркер запустился но ничего не вернул:\n{detail}",
+                "message": (
+                    f"Воркер запустился но ничего не вернул:\n{detail}\n\n"
+                    f"Путь к воркеру: {WORKER_SCRIPT}\n"
+                    f"Python 32-bit: {PYTHON32_PATH}"
+                ),
                 "data": {}
             }
 
@@ -89,7 +102,7 @@ def call_worker(server_name, user_name, notes_password, expiration_days):
     except subprocess.TimeoutExpired:
         return {"success": False, "message": "Превышено время ожидания (60 сек). Проверьте подключение к серверу.", "data": {}}
     except json.JSONDecodeError as e:
-        return {"success": False, "message": f"Некорректный ответ от воркера:\n{proc.stdout}\n{e}", "data": {}}
+        return {"success": False, "message": f"Некорректный ответ от воркера:\n{stdout_text}\n{e}", "data": {}}
     except Exception as e:
         return {"success": False, "message": str(e), "data": {}}
 
