@@ -1,6 +1,7 @@
 # main.py — основной GUI файл, запускается 64-bit Python
 # Требования: pip install (ничего дополнительно — tkinter встроен)
 
+import sys
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 import subprocess
@@ -12,7 +13,16 @@ from datetime import datetime
 # ─── Настройки ────────────────────────────────────────────────────────────────
 
 PYTHON32_PATH = r"C:\Python313-32\python.exe"
-WORKER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "notes_worker.py")
+
+# Корректный путь и в обычном режиме и после компиляции PyInstaller
+if getattr(sys, "frozen", False):
+    # Запущено как .exe — файлы лежат в _internal рядом с .exe
+    BASE_DIR = os.path.dirname(sys.executable)
+    WORKER_SCRIPT = os.path.join(BASE_DIR, "_internal", "notes_worker.py")
+else:
+    # Обычный запуск через python main.py
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+    WORKER_SCRIPT = os.path.join(BASE_DIR, "notes_worker.py")
 
 # ─── Логика вызова воркера ────────────────────────────────────────────────────
 
