@@ -16,9 +16,14 @@ PYTHON32_PATH = r"C:\Python313-32\python.exe"
 
 # Корректный путь и в обычном режиме и после компиляции PyInstaller
 if getattr(sys, "frozen", False):
-    # Запущено как .exe — файлы лежат в _internal рядом с .exe
+    # Запущено как .exe
+    # sys.executable = путь к .exe
+    # sys._MEIPASS   = папка _internal (временные файлы PyInstaller)
     BASE_DIR = os.path.dirname(sys.executable)
-    WORKER_SCRIPT = os.path.join(BASE_DIR, "_internal", "notes_worker.py")
+    # Ищем notes_worker.py сначала рядом с .exe, потом в _internal
+    WORKER_SCRIPT = os.path.join(BASE_DIR, "notes_worker.py")
+    if not os.path.exists(WORKER_SCRIPT):
+        WORKER_SCRIPT = os.path.join(sys._MEIPASS, "notes_worker.py")
 else:
     # Обычный запуск через python main.py
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -38,7 +43,7 @@ def call_worker(server_name, user_name, notes_password, expiration_days):
     if not os.path.exists(WORKER_SCRIPT):
         return {
             "success": False,
-            "message": f"Файл воркера не найден:\n{WORKER_SCRIPT}",
+            "message": f"Файл воркера не найден:\n{WORKER_SCRIPT}\n\nСкопируйте notes_worker.py рядом с .exe файлом:\n{os.path.dirname(sys.executable)}",
             "data": {}
         }
 
