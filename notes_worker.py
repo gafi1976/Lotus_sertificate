@@ -65,20 +65,91 @@ def find_user_doc(db, user_name):
     return doc
 
 
-def days_until(date_str):
-    """Вычисляет сколько дней осталось до даты."""
+def days_until(date_val):
+    """Вычисляет сколько дней осталось до даты. Поддерживает все форматы Notes."""
     try:
-        # Notes возвращает дату в разных форматах — пробуем несколько
-        for fmt in ("%m/%d/%Y", "%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y"):
+        date_str = str(date_val).strip()
+
+        # ── Пробуем строковые форматы ─────────────────────────────────────────
+        string_formats = [
+            "%m/%d/%Y",      # 12/31/2027
+            "%d.%m.%Y",      # 31.12.2027
+            "%Y-%m-%d",      # 2027-12-31
+            "%d/%m/%Y",      # 31/12/2027
+            "%Y%m%d",        # 20271231
+            "%m/%d/%Y %H:%M:%S",   # 12/31/2027 00:00:00
+            "%d.%m.%Y %H:%M:%S",   # 31.12.2027 00:00:00
+            "%Y-%m-%dT%H:%M:%S",   # 2027-12-31T00:00:00
+        ]
+        for fmt in string_formats:
             try:
-                exp_date = datetime.strptime(date_str.split()[0], fmt)
-                delta = (exp_date - datetime.now()).days
-                return delta
+                exp_date = datetime.strptime(date_str.split()[0] if " " in date_str else date_str, fmt)
+                return (exp_date - datetime.now()).days
             except Exception:
                 continue
+
+        # ── Пробуем числовой формат ───────────────────────────────────────────
+        # Убираем всё нечисловое кроме точки
+        clean = ''.join(c for c in date_str if c.isdigit() or c == '.')
+        if clean:
+            num = float(clean)
+
+            # Notes хранит даты как количество секунд с 01.01.1900
+            # Обычно это большое число > 3_000_000_000 (это уже после 1995 года в Notes)
+            if num > 3_000_000_000:
+                # Notes datetime: секунды с 01.01.1900 00:00:00
+                notes_epoch = datetime(1899, 12, 30)
+                exp_date = notes_epoch + __import__('datetime').timedelta(seconds=num)
+                return (exp_date - datetime.now()).days
+
+            elif num > 1_000_000_000:
+                # Unix timestamp: секунды с 01.01.1970
+                exp_date = datetime.fromtimestamp(num)
+                return (exp_date - datetime.now()).days
+
+            elif num > 40_000:
+                # OLE/Excel дата: дни с 30.12.1899
+                notes_epoch = datetime(1899, 12, 30)
+                exp_date = notes_epoch + __import__('datetime').timedelta(days=int(num))
+                return (exp_date - datetime.now()).days
+
     except Exception:
         pass
     return None
+
+
+def format_date(date_val):
+    """Форматирует дату Notes в читаемый вид дд.мм.гггг."""
+    try:
+        date_str = str(date_val).strip()
+
+        string_formats = [
+            "%m/%d/%Y", "%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y",
+            "%m/%d/%Y %H:%M:%S", "%d.%m.%Y %H:%M:%S", "%Y-%m-%dT%H:%M:%S",
+        ]
+        for fmt in string_formats:
+            try:
+                d = datetime.strptime(date_str.split()[0] if " " in date_str else date_str, fmt)
+                return d.strftime("%d.%m.%Y")
+            except Exception:
+                continue
+
+        clean = ''.join(c for c in date_str if c.isdigit() or c == '.')
+        if clean:
+            num = float(clean)
+            notes_epoch = datetime(1899, 12, 30)
+            if num > 3_000_000_000:
+                d = notes_epoch + __import__('datetime').timedelta(seconds=num)
+                return d.strftime("%d.%m.%Y")
+            elif num > 1_000_000_000:
+                d = datetime.fromtimestamp(num)
+                return d.strftime("%d.%m.%Y")
+            elif num > 40_000:
+                d = notes_epoch + __import__('datetime').timedelta(days=int(num))
+                return d.strftime("%d.%m.%Y")
+    except Exception:
+        pass
+    return str(date_val)
 
 
 def action_check(win32com, params):
@@ -156,7 +227,7 @@ def action_check(win32com, params):
                 break
 
     if exp_str:
-        data["expiration_date"] = exp_str
+        data["expiration_date"] = format_date(exp_str)  # красивый формат дд.мм.гггг
         data["expiration_field"] = exp_field_found
         days = days_until(exp_str)
         if days is not None:
@@ -175,7 +246,7 @@ def action_check(win32com, params):
                 data["status_text"] = f"Действителен ещё {days} дней"
         else:
             data["status"] = "ok"
-            data["status_text"] = f"Действителен (дата: {exp_str})"
+            data["status_text"] = f"Действителен (дата: {format_date(exp_str)})"
     else:
         data["expiration_date"] = "Не найдена"
         data["status"] = "unknown"
@@ -189,7 +260,7 @@ def action_check(win32com, params):
         try:
             val = doc.GetItemValue(field)
             if val and val[0] and str(val[0]).strip():
-                data["issued_date"] = str(val[0])
+                data["issued_date"] = format_date(str(val[0]))
                 break
         except Exception:
             continue
