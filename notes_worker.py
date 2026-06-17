@@ -95,46 +95,104 @@ def action_check(win32com, params):
         "full_name":  doc.GetItemValue("FullName")[0],
     }
 
-    # Дата истечения сертификата
-    try:
-        cert_exp = doc.GetItemValue("CertExpiration")
-        if cert_exp and cert_exp[0]:
-            exp_str = str(cert_exp[0])
-            data["expiration_date"] = exp_str
-            days = days_until(exp_str)
-            if days is not None:
-                data["days_left"] = days
-                if days < 0:
-                    data["status"] = "expired"
-                    data["status_text"] = f"ПРОСРОЧЕН ({abs(days)} дней назад)"
-                elif days <= 30:
-                    data["status"] = "warning"
-                    data["status_text"] = f"Истекает через {days} дней — скоро!"
-                elif days <= 90:
-                    data["status"] = "warning"
-                    data["status_text"] = f"Истекает через {days} дней"
-                else:
-                    data["status"] = "ok"
-                    data["status_text"] = f"Действителен ещё {days} дней"
-            else:
-                data["status"] = "ok"
-                data["status_text"] = "Действителен"
-        else:
-            data["expiration_date"] = "Не указана"
-            data["status"] = "unknown"
-            data["status_text"] = "Дата не определена"
-    except Exception as e:
-        data["expiration_date"] = "Ошибка чтения"
-        data["status"] = "unknown"
-        data["status_text"] = str(e)
+    # ── Все возможные названия полей даты истечения в разных версиях Notes ────
+    EXP_FIELDS = [
+        "CertExpiration",
+        "CertificateExpiration",
+        "Expiration",
+        "CertExp",
+        "HTTPPasswordExpires",
+        "PasswordExpiration",
+        "certexp",
+        "certexpiration",
+    ]
 
-    # Дата выдачи сертификата
+    # ── Все возможные названия полей даты выдачи ──────────────────────────────
+    ISSUED_FIELDS = [
+        "CertIssued",
+        "CertificateIssued",
+        "Issued",
+        "CertDate",
+        "certissued",
+    ]
+
+    # Диагностика — собираем все поля документа содержащие "cert" или "exp"
+    diag_fields = {}
     try:
-        cert_issued = doc.GetItemValue("CertIssued")
-        if cert_issued and cert_issued[0]:
-            data["issued_date"] = str(cert_issued[0])
+        items = doc.Items
+        for item in items:
+            name = item.Name.lower()
+            if any(k in name for k in ("cert", "exp", "issued", "pass", "date")):
+                try:
+                    val = doc.GetItemValue(item.Name)
+                    if val and val[0]:
+                        diag_fields[item.Name] = str(val[0])
+                except Exception:
+                    pass
     except Exception:
         pass
+
+    data["debug_fields"] = diag_fields  # отправляем для диагностики
+
+    # Ищем дату истечения
+    exp_str = None
+    exp_field_found = None
+    for field in EXP_FIELDS:
+        try:
+            val = doc.GetItemValue(field)
+            if val and val[0] and str(val[0]).strip():
+                exp_str = str(val[0])
+                exp_field_found = field
+                break
+        except Exception:
+            continue
+
+    # Если не нашли в известных полях — ищем в diag_fields
+    if not exp_str:
+        for fname, fval in diag_fields.items():
+            if any(k in fname.lower() for k in ("exp", "cert")) and fval:
+                exp_str = fval
+                exp_field_found = fname
+                break
+
+    if exp_str:
+        data["expiration_date"] = exp_str
+        data["expiration_field"] = exp_field_found
+        days = days_until(exp_str)
+        if days is not None:
+            data["days_left"] = days
+            if days < 0:
+                data["status"] = "expired"
+                data["status_text"] = f"ПРОСРОЧЕН ({abs(days)} дней назад)"
+            elif days <= 30:
+                data["status"] = "warning"
+                data["status_text"] = f"Истекает через {days} дней — срочно!"
+            elif days <= 90:
+                data["status"] = "warning"
+                data["status_text"] = f"Истекает через {days} дней"
+            else:
+                data["status"] = "ok"
+                data["status_text"] = f"Действителен ещё {days} дней"
+        else:
+            data["status"] = "ok"
+            data["status_text"] = f"Действителен (дата: {exp_str})"
+    else:
+        data["expiration_date"] = "Не найдена"
+        data["status"] = "unknown"
+        data["status_text"] = (
+            "Дата истечения не найдена в документе.\n"
+            f"Найденные поля: {list(diag_fields.keys()) if diag_fields else 'нет'}"
+        )
+
+    # Ищем дату выдачи
+    for field in ISSUED_FIELDS:
+        try:
+            val = doc.GetItemValue(field)
+            if val and val[0] and str(val[0]).strip():
+                data["issued_date"] = str(val[0])
+                break
+        except Exception:
+            continue
 
     send({"success": True, "message": "Данные сертификата получены", "data": data})
 

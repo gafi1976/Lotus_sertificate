@@ -549,6 +549,18 @@ class LotusRenewApp(tk.Tk):
                     self._log(f"Осталось      : {days_left} дней", "info")
                 self._log(f"Статус        : {status_txt}", tag)
 
+                # Показываем найденные поля для диагностики если дата не найдена
+                if status == "unknown":
+                    debug = data.get("debug_fields", {})
+                    if debug:
+                        self._log("── Диагностика: найденные поля ──", "warn")
+                        for fname, fval in debug.items():
+                            self._log(f"  {fname} = {fval}", "warn")
+                    else:
+                        self._log("Диагностика: поля с датами не найдены в документе", "error")
+                elif "expiration_field" in data:
+                    self._log(f"Поле даты     : {data['expiration_field']}", "info")
+
             else:
                 # ── Результат продления ───────────────────────────────────────
                 self._log("УСПЕШНО: " + result["message"], "success")
