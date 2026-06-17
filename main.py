@@ -3,42 +3,116 @@
 
 import sys
 import tkinter as tk
-from tkinter import ttk, messagebox, scrolledtext
+from tkinter import ttk, messagebox, scrolledtext, filedialog
 import subprocess
 import json
 import os
 import threading
 from datetime import datetime
 
-# ─── Настройки ────────────────────────────────────────────────────────────────
+# ─── Пути ─────────────────────────────────────────────────────────────────────
 
-PYTHON32_PATH = r"C:\Python313-32\python.exe"
-
-# Корректный путь и в обычном режиме и после компиляции PyInstaller
 if getattr(sys, "frozen", False):
-    # Запущено как .exe — notes_worker.py лежит рядом с .exe
     BASE_DIR = os.path.dirname(sys.executable)
 else:
-    # Обычный запуск через python main.py
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 WORKER_SCRIPT = os.path.join(BASE_DIR, "notes_worker.py")
+CONFIG_FILE   = os.path.join(BASE_DIR, "config.json")
+
+# ─── Конфигурация (сохраняется в config.json рядом с .exe) ────────────────────
+
+DEFAULT_CONFIG = {
+    "python32_path": "",
+    "server_name":   "",
+    "user_name":     "",
+}
+
+def load_config():
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                # Добавляем недостающие ключи из DEFAULT_CONFIG
+                for k, v in DEFAULT_CONFIG.items():
+                    data.setdefault(k, v)
+                return data
+    except Exception:
+        pass
+    return DEFAULT_CONFIG.copy()
+
+def save_config(cfg):
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+# ─── Автопоиск 32-битного Python ──────────────────────────────────────────────
+
+PYTHON32_SEARCH_PATHS = [
+    r"C:\Python313-32\python.exe",
+    r"C:\Python312-32\python.exe",
+    r"C:\Python311-32\python.exe",
+    r"C:\Python310-32\python.exe",
+    r"C:\Python39-32\python.exe",
+    r"C:\Python38-32\python.exe",
+    r"C:\Python313_32\python.exe",
+    r"C:\Python312_32\python.exe",
+    r"C:\Python311_32\python.exe",
+    r"C:\Python310_32\python.exe",
+    r"C:\Python\Python313-32\python.exe",
+    r"C:\Python\Python312-32\python.exe",
+    r"C:\Program Files (x86)\Python313\python.exe",
+    r"C:\Program Files (x86)\Python312\python.exe",
+    r"C:\Program Files (x86)\Python311\python.exe",
+    r"C:\Program Files (x86)\Python310\python.exe",
+    r"C:\Program Files (x86)\Python39\python.exe",
+    r"C:\Program Files (x86)\Python38\python.exe",
+    r"C:\Users\{user}\AppData\Local\Programs\Python\Python313-32\python.exe",
+    r"C:\Users\{user}\AppData\Local\Programs\Python\Python312-32\python.exe",
+    r"C:\Users\{user}\AppData\Local\Programs\Python\Python311-32\python.exe",
+]
+
+def find_python32():
+    """Ищет 32-битный Python в стандартных местах."""
+    username = os.environ.get("USERNAME", "")
+    for path in PYTHON32_SEARCH_PATHS:
+        path = path.replace("{user}", username)
+        if os.path.exists(path):
+            # Проверяем что это действительно 32-bit
+            try:
+                result = subprocess.run(
+                    [path, "-c", "import sys; print(sys.maxsize)"],
+                    capture_output=True, text=True, timeout=5
+                )
+                if result.stdout.strip() == "2147483647":
+                    return path
+            except Exception:
+                continue
+    return ""
 
 # ─── Логика вызова воркера ────────────────────────────────────────────────────
 
-def call_worker(server_name, user_name, notes_password, expiration_days):
+def call_worker(python32_path, server_name, user_name, notes_password, expiration_days):
     """Запускает notes_worker.py через 32-битный Python и возвращает результат."""
-    if not os.path.exists(PYTHON32_PATH):
+    if not python32_path or not os.path.exists(python32_path):
         return {
             "success": False,
-            "message": f"32-битный Python не найден:\n{PYTHON32_PATH}",
+            "message": (
+                f"32-битный Python не найден:\n{python32_path}\n\n"
+                f"Укажите путь вручную в поле 'Python 32-bit' или нажмите кнопку '...' для выбора."
+            ),
             "data": {}
         }
 
     if not os.path.exists(WORKER_SCRIPT):
         return {
             "success": False,
-            "message": f"Файл воркера не найден:\n{WORKER_SCRIPT}\n\nСкопируйте notes_worker.py рядом с .exe файлом:\n{os.path.dirname(sys.executable)}",
+            "message": (
+                f"Файл notes_worker.py не найден:\n{WORKER_SCRIPT}\n\n"
+                f"Скопируйте notes_worker.py рядом с программой."
+            ),
             "data": {}
         }
 
@@ -50,15 +124,13 @@ def call_worker(server_name, user_name, notes_password, expiration_days):
     }, ensure_ascii=False)
 
     try:
-        # Передаём параметры как байты чтобы избежать проблем с кодировкой Windows
         proc = subprocess.run(
-            [PYTHON32_PATH, WORKER_SCRIPT],
+            [python32_path, WORKER_SCRIPT],
             input=params.encode("utf-8"),
             capture_output=True,
             timeout=60
         )
 
-        # Декодируем вывод — пробуем utf-8, потом cp1251
         def decode(b):
             if not b:
                 return ""
@@ -84,20 +156,16 @@ def call_worker(server_name, user_name, notes_password, expiration_days):
             detail = stderr_text or "воркер не вернул данные"
             return {
                 "success": False,
-                "message": (
-                    f"Воркер запустился но ничего не вернул:\n{detail}\n\n"
-                    f"Путь к воркеру: {WORKER_SCRIPT}\n"
-                    f"Python 32-bit: {PYTHON32_PATH}"
-                ),
+                "message": f"Воркер запустился но ничего не вернул:\n{detail}",
                 "data": {}
             }
 
         return json.loads(stdout_text)
 
     except subprocess.TimeoutExpired:
-        return {"success": False, "message": "Превышено время ожидания (60 сек). Проверьте подключение к серверу.", "data": {}}
+        return {"success": False, "message": "Превышено время ожидания (60 сек).", "data": {}}
     except json.JSONDecodeError as e:
-        return {"success": False, "message": f"Некорректный ответ от воркера:\n{stdout_text}\n{e}", "data": {}}
+        return {"success": False, "message": f"Некорректный ответ:\n{stdout_text}\n{e}", "data": {}}
     except Exception as e:
         return {"success": False, "message": str(e), "data": {}}
 
@@ -107,11 +175,16 @@ class LotusRenewApp(tk.Tk):
 
     def __init__(self):
         super().__init__()
-
+        self.config_data = load_config()
         self.title("Lotus Notes — Продление сертификата")
         self.resizable(False, False)
-        self._center_window(560, 580)
+        self._center_window(580, 650)
         self._build_ui()
+        self._apply_config()
+
+        # Если путь к Python32 не сохранён — ищем автоматически
+        if not self.var_python32.get():
+            self._auto_find_python32()
 
     def _center_window(self, w, h):
         self.update_idletasks()
@@ -121,9 +194,36 @@ class LotusRenewApp(tk.Tk):
         y = (sh - h) // 2
         self.geometry(f"{w}x{h}+{x}+{y}")
 
+    def _apply_config(self):
+        self.var_python32.set(self.config_data.get("python32_path", ""))
+        self.var_server.set(self.config_data.get("server_name", ""))
+        self.var_user.set(self.config_data.get("user_name", ""))
+
+    def _save_config(self):
+        self.config_data["python32_path"] = self.var_python32.get().strip()
+        self.config_data["server_name"]   = self.var_server.get().strip()
+        self.config_data["user_name"]     = self.var_user.get().strip()
+        save_config(self.config_data)
+
+    def _auto_find_python32(self):
+        self._log("Поиск 32-битного Python...", "warn")
+        def search():
+            path = find_python32()
+            self.after(0, self._on_python32_found, path)
+        threading.Thread(target=search, daemon=True).start()
+
+    def _on_python32_found(self, path):
+        if path:
+            self.var_python32.set(path)
+            self._log(f"Python 32-bit найден: {path}", "success")
+            self._save_config()
+        else:
+            self._log("Python 32-bit не найден автоматически — укажите путь вручную.", "error")
+
     # ── Построение интерфейса ─────────────────────────────────────────────────
 
     def _build_ui(self):
+
         # ── Заголовок ─────────────────────────────────────────────────────────
         header = tk.Frame(self, bg="#003366")
         header.pack(fill="x")
@@ -135,33 +235,51 @@ class LotusRenewApp(tk.Tk):
             pady=10
         ).pack()
 
-        # ── Форма ─────────────────────────────────────────────────────────────
+        # ── Настройки Python32 ────────────────────────────────────────────────
+        py_frame = tk.LabelFrame(self, text=" Python 32-bit ", font=("Segoe UI", 9, "bold"), padx=10, pady=6)
+        py_frame.pack(fill="x", padx=14, pady=(10, 4))
+
+        self.var_python32 = tk.StringVar()
+        py_entry = tk.Entry(py_frame, textvariable=self.var_python32, width=44, font=("Segoe UI", 9))
+        py_entry.grid(row=0, column=0, sticky="ew", padx=(0, 4))
+
+        tk.Button(
+            py_frame, text="...", width=3,
+            command=self._browse_python32,
+            font=("Segoe UI", 9), relief="flat", bg="#e0e0e0", cursor="hand2"
+        ).grid(row=0, column=1)
+
+        tk.Button(
+            py_frame, text="Найти автоматически",
+            command=self._auto_find_python32,
+            font=("Segoe UI", 8), relief="flat", bg="#e8f0fe", cursor="hand2",
+            padx=6
+        ).grid(row=0, column=2, padx=(4, 0))
+
+        py_frame.columnconfigure(0, weight=1)
+
+        # ── Форма подключения ─────────────────────────────────────────────────
         form = tk.LabelFrame(self, text=" Параметры подключения ", font=("Segoe UI", 9, "bold"), padx=10, pady=8)
-        form.pack(fill="x", padx=14, pady=(12, 4))
+        form.pack(fill="x", padx=14, pady=4)
 
         # Сервер
         tk.Label(form, text="Сервер Domino:", anchor="w", font=("Segoe UI", 9)).grid(row=0, column=0, sticky="w", pady=4)
         self.var_server = tk.StringVar()
         tk.Entry(form, textvariable=self.var_server, width=38, font=("Segoe UI", 9)).grid(row=0, column=1, sticky="ew", padx=(8, 0), pady=4)
-
-        # Подсказка для сервера
         tk.Label(form, text='например: DominoServer/MyOrg', fg="gray", font=("Segoe UI", 8)).grid(row=1, column=1, sticky="w", padx=(8, 0))
 
         # Пользователь
         tk.Label(form, text="Пользователь:", anchor="w", font=("Segoe UI", 9)).grid(row=2, column=0, sticky="w", pady=4)
         self.var_user = tk.StringVar()
         tk.Entry(form, textvariable=self.var_user, width=38, font=("Segoe UI", 9)).grid(row=2, column=1, sticky="ew", padx=(8, 0), pady=4)
-
-        # Подсказка для пользователя
         tk.Label(form, text='например: Ivan Ivanov/Dept/MyOrg', fg="gray", font=("Segoe UI", 8)).grid(row=3, column=1, sticky="w", padx=(8, 0))
 
-        # Пароль Notes ID
+        # Пароль
         tk.Label(form, text="Пароль Notes ID:", anchor="w", font=("Segoe UI", 9)).grid(row=4, column=0, sticky="w", pady=4)
         self.var_password = tk.StringVar()
         self.entry_password = tk.Entry(form, textvariable=self.var_password, width=38, show="•", font=("Segoe UI", 9))
         self.entry_password.grid(row=4, column=1, sticky="ew", padx=(8, 0), pady=4)
 
-        # Показать/скрыть пароль
         self.show_pass = tk.BooleanVar(value=False)
         tk.Checkbutton(
             form, text="Показать пароль", variable=self.show_pass,
@@ -175,50 +293,35 @@ class LotusRenewApp(tk.Tk):
         exp_frame.pack(fill="x", padx=14, pady=4)
 
         self.var_days = tk.IntVar(value=365)
+        options = [("6 месяцев", 180), ("1 год", 365), ("2 года", 730), ("3 года", 1095)]
 
-        options = [
-            ("6 месяцев",  180),
-            ("1 год",      365),
-            ("2 года",     730),
-            ("3 года",    1095),
-        ]
-
-        btn_frame = tk.Frame(exp_frame)
-        btn_frame.pack(side="left")
-
+        rb_frame = tk.Frame(exp_frame)
+        rb_frame.pack(side="left")
         for label, days in options:
-            tk.Radiobutton(
-                btn_frame, text=label, variable=self.var_days, value=days,
-                font=("Segoe UI", 9)
-            ).pack(side="left", padx=6)
+            tk.Radiobutton(rb_frame, text=label, variable=self.var_days, value=days, font=("Segoe UI", 9)).pack(side="left", padx=6)
 
-        # Своё значение
         tk.Label(exp_frame, text="  или дней:", font=("Segoe UI", 9)).pack(side="left")
         self.var_custom_days = tk.StringVar()
         tk.Entry(exp_frame, textvariable=self.var_custom_days, width=6, font=("Segoe UI", 9)).pack(side="left", padx=4)
 
         # ── Кнопки ────────────────────────────────────────────────────────────
-        btn_frame2 = tk.Frame(self)
-        btn_frame2.pack(fill="x", padx=14, pady=(8, 4))
+        btn_frame = tk.Frame(self)
+        btn_frame.pack(fill="x", padx=14, pady=(8, 4))
 
         self.btn_run = tk.Button(
-            btn_frame2,
-            text="▶  Продлить сертификат",
+            btn_frame, text="▶  Продлить сертификат",
             command=self._on_run,
             bg="#0066CC", fg="white",
             font=("Segoe UI", 10, "bold"),
-            relief="flat", cursor="hand2",
-            padx=16, pady=6
+            relief="flat", cursor="hand2", padx=16, pady=6
         )
         self.btn_run.pack(side="left")
 
         tk.Button(
-            btn_frame2,
-            text="Очистить лог",
+            btn_frame, text="Очистить лог",
             command=self._clear_log,
-            font=("Segoe UI", 9),
-            relief="flat", cursor="hand2",
-            padx=10, pady=6, bg="#e0e0e0"
+            font=("Segoe UI", 9), relief="flat",
+            cursor="hand2", padx=10, pady=6, bg="#e0e0e0"
         ).pack(side="right")
 
         # ── Прогресс ──────────────────────────────────────────────────────────
@@ -236,7 +339,6 @@ class LotusRenewApp(tk.Tk):
         )
         self.log.pack(fill="both", expand=True)
 
-        # Теги цветов для лога
         self.log.tag_config("info",    foreground="#9cdcfe")
         self.log.tag_config("success", foreground="#4ec9b0")
         self.log.tag_config("error",   foreground="#f44747")
@@ -246,6 +348,17 @@ class LotusRenewApp(tk.Tk):
         self._log("Готов к работе. Заполните параметры и нажмите «Продлить сертификат».", "info")
 
     # ── Вспомогательные методы ────────────────────────────────────────────────
+
+    def _browse_python32(self):
+        path = filedialog.askopenfilename(
+            title="Выберите python.exe (32-bit)",
+            filetypes=[("Python", "python.exe"), ("Все файлы", "*.*")],
+            initialdir="C:\\"
+        )
+        if path:
+            self.var_python32.set(path)
+            self._save_config()
+            self._log(f"Python 32-bit установлен: {path}", "success")
 
     def _toggle_password(self):
         self.entry_password.config(show="" if self.show_pass.get() else "•")
@@ -264,21 +377,20 @@ class LotusRenewApp(tk.Tk):
         self.log.config(state="disabled")
 
     def _set_busy(self, busy: bool):
-        state = "disabled" if busy else "normal"
-        self.btn_run.config(state=state)
+        self.btn_run.config(state="disabled" if busy else "normal")
         if busy:
             self.progress.start(12)
         else:
             self.progress.stop()
 
-    # ── Обработка нажатия "Продлить" ─────────────────────────────────────────
+    # ── Запуск продления ─────────────────────────────────────────────────────
 
     def _on_run(self):
+        python32 = self.var_python32.get().strip()
         server   = self.var_server.get().strip()
         user     = self.var_user.get().strip()
         password = self.var_password.get()
 
-        # Определяем количество дней
         custom = self.var_custom_days.get().strip()
         if custom:
             if not custom.isdigit() or int(custom) <= 0:
@@ -288,7 +400,9 @@ class LotusRenewApp(tk.Tk):
         else:
             days = self.var_days.get()
 
-        # Валидация
+        if not python32:
+            messagebox.showerror("Ошибка", "Укажите путь к 32-битному Python")
+            return
         if not server:
             messagebox.showerror("Ошибка", "Укажите имя сервера Domino")
             return
@@ -296,28 +410,28 @@ class LotusRenewApp(tk.Tk):
             messagebox.showerror("Ошибка", "Укажите имя пользователя")
             return
 
-        self._set_busy(True)
-        self._log(f"Запуск продления сертификата...", "warn")
-        self._log(f"Сервер    : {server}", "info")
-        self._log(f"Пользователь: {user}", "info")
-        self._log(f"Срок      : {days} дней", "info")
+        # Сохраняем настройки
+        self._save_config()
 
-        # Запускаем в отдельном потоке, чтобы GUI не зависал
+        self._set_busy(True)
+        self._log("Запуск продления сертификата...", "warn")
+        self._log(f"Python 32-bit : {python32}", "info")
+        self._log(f"Сервер        : {server}", "info")
+        self._log(f"Пользователь  : {user}", "info")
+        self._log(f"Срок          : {days} дней", "info")
+
         thread = threading.Thread(
             target=self._run_worker,
-            args=(server, user, password, days),
+            args=(python32, server, user, password, days),
             daemon=True
         )
         thread.start()
 
-    def _run_worker(self, server, user, password, days):
-        """Выполняется в фоновом потоке."""
-        result = call_worker(server, user, password, days)
-        # Обновляем GUI из главного потока
+    def _run_worker(self, python32, server, user, password, days):
+        result = call_worker(python32, server, user, password, days)
         self.after(0, self._on_result, result)
 
     def _on_result(self, result):
-        """Вызывается в главном потоке после завершения воркера."""
         self._set_busy(False)
 
         if result["success"]:
@@ -346,7 +460,6 @@ class LotusRenewApp(tk.Tk):
             self._log("─" * 45, "time")
             self._log("ОШИБКА: " + result["message"], "error")
             self._log("─" * 45, "time")
-
             messagebox.showerror("Ошибка", result["message"])
 
 
