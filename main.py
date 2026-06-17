@@ -16,18 +16,13 @@ PYTHON32_PATH = r"C:\Python313-32\python.exe"
 
 # Корректный путь и в обычном режиме и после компиляции PyInstaller
 if getattr(sys, "frozen", False):
-    # Запущено как .exe
-    # sys.executable = путь к .exe
-    # sys._MEIPASS   = папка _internal (временные файлы PyInstaller)
+    # Запущено как .exe — notes_worker.py лежит рядом с .exe
     BASE_DIR = os.path.dirname(sys.executable)
-    # Ищем notes_worker.py сначала рядом с .exe, потом в _internal
-    WORKER_SCRIPT = os.path.join(BASE_DIR, "notes_worker.py")
-    if not os.path.exists(WORKER_SCRIPT):
-        WORKER_SCRIPT = os.path.join(sys._MEIPASS, "notes_worker.py")
 else:
     # Обычный запуск через python main.py
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-    WORKER_SCRIPT = os.path.join(BASE_DIR, "notes_worker.py")
+
+WORKER_SCRIPT = os.path.join(BASE_DIR, "notes_worker.py")
 
 # ─── Логика вызова воркера ────────────────────────────────────────────────────
 
