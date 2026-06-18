@@ -341,6 +341,15 @@ class LotusRenewApp(tk.Tk):
         )
         self.btn_check.pack(side="left", padx=(8, 0))
 
+        self.btn_access = tk.Button(
+            btn_frame, text="🔑  Проверить доступ",
+            command=self._on_check_access,
+            bg="#6f42c1", fg="white",
+            font=("Segoe UI", 10, "bold"),
+            relief="flat", cursor="hand2", padx=16, pady=6
+        )
+        self.btn_access.pack(side="left", padx=(8, 0))
+
         tk.Button(
             btn_frame, text="Очистить лог",
             command=self._clear_log,
@@ -438,12 +447,37 @@ class LotusRenewApp(tk.Tk):
         state = "disabled" if busy else "normal"
         self.btn_run.config(state=state)
         self.btn_check.config(state=state)
+        self.btn_access.config(state=state)
         if busy:
             self.progress.start(12)
         else:
             self.progress.stop()
 
     # ── Проверка сертификата ──────────────────────────────────────────────────
+
+    def _on_check_access(self):
+        """Проверяет уровень доступа к admin4.nsf и names.nsf."""
+        python32 = self.var_python32.get().strip()
+        server   = self.var_server.get().strip()
+        password = self.var_password.get()
+
+        if not python32:
+            messagebox.showerror("Ошибка", "Укажите путь к 32-битному Python")
+            return
+        if not server:
+            messagebox.showerror("Ошибка", "Укажите имя сервера Domino")
+            return
+
+        self._set_busy(True)
+        self._log("Проверка прав доступа...", "warn")
+        self._log(f"Сервер: {server}", "info")
+
+        thread = threading.Thread(
+            target=self._run_worker,
+            args=(python32, server, "", password, 365, "check_access", ""),
+            daemon=True
+        )
+        thread.start()
 
     def _on_check(self):
         python32 = self.var_python32.get().strip()
@@ -561,7 +595,6 @@ class LotusRenewApp(tk.Tk):
     def _run_worker(self, python32, server, user, password, days, action="renew", idfile=""):
         result = call_worker(python32, server, user, password, days, action, idfile)
         self.after(0, self._on_result, result, action)
-
     def _on_result(self, result, action="renew"):
         self._set_busy(False)
 
@@ -607,7 +640,46 @@ class LotusRenewApp(tk.Tk):
             if "_worker_file" in result:
                 self._log(f"Воркер        : {result['_worker_file']} v{result.get('_worker_version','?')}", "warn")
 
-            if action == "check":
+            if action == "check_access":
+                # ── Результат проверки доступа ────────────────────────────────
+                checks  = data.get("checks", [])
+                all_ok  = data.get("all_ok", False)
+                summary = data.get("summary", "")
+
+                self._log(f"Пользователь  : {data.get('admin_user','')}", "info")
+                self._log("─" * 45, "time")
+
+                for c in checks:
+                    icon = "✓" if c["ok"] else "✗"
+                    tag  = "success" if c["ok"] else "error"
+                    self._log(
+                        f"{icon} {c['file']:<15} "
+                        f"Уровень: {c['level']} — {c['text']}",
+                        tag
+                    )
+                    if not c["ok"]:
+                        self._log(
+                            f"  Требуется: {c['needed']}",
+                            "warn"
+                        )
+
+                self._log("─" * 45, "time")
+                tag_sum = "success" if all_ok else "error"
+                self._log(summary, tag_sum)
+
+                # Показываем диалог
+                icon_msg = "✅" if all_ok else "❌"
+                msg = f"{icon_msg} {summary}\n\n"
+                for c in checks:
+                    icon = "✓" if c["ok"] else "✗"
+                    msg += f"{icon} {c['file']}: {c['text']}\n"
+                if all_ok:
+                    messagebox.showinfo("Проверка доступа", msg)
+                else:
+                    msg += "\nОбратитесь к администратору Domino для получения прав."
+                    messagebox.showwarning("Недостаточно прав", msg)
+
+            elif action == "check":
                 # ── Результат проверки ────────────────────────────────────────
                 self._update_status_panel(data)
                 status     = data.get("status", "unknown")

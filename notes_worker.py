@@ -257,6 +257,103 @@ def parse_id_file(id_file_path):
 
 # ─── Действия ─────────────────────────────────────────────────────────────────
 
+def action_check_access(win32com, params):
+    """
+    Проверяет уровень доступа текущего пользователя к admin4.nsf и names.nsf.
+    """
+    server_name    = params.get("server_name", "")
+    notes_password = params.get("notes_password", "")
+
+    # Уровни доступа Notes
+    ACCESS_LEVELS = {
+        0: "Нет доступа",
+        1: "Depositor (только создание)",
+        2: "Reader (только чтение)",
+        3: "Author (чтение + создание своих)",
+        4: "Editor (чтение + редактирование)",
+        5: "Designer (+ дизайн)",
+        6: "Manager (полный доступ)",
+    }
+
+    session, db_names = get_session_and_db(win32com, server_name, notes_password)
+
+    data = {
+        "admin_user": session.CommonUserName,
+        "checks": []
+    }
+
+    # ── Проверяем names.nsf ───────────────────────────────────────────────────
+    try:
+        level_names = db_names.CurrentAccessLevel
+        data["checks"].append({
+            "file":    "names.nsf",
+            "level":   level_names,
+            "text":    ACCESS_LEVELS.get(level_names, f"Уровень {level_names}"),
+            "ok":      level_names >= 2,  # минимум Reader
+            "needed":  "Reader (2) или выше"
+        })
+    except Exception as e:
+        data["checks"].append({
+            "file": "names.nsf", "level": -1,
+            "text": f"Ошибка: {e}", "ok": False, "needed": "Reader (2)"
+        })
+
+    # ── Проверяем admin4.nsf ──────────────────────────────────────────────────
+    try:
+        admin_db = session.GetDatabase(server_name, "admin4.nsf")
+        if not admin_db.IsOpen:
+            admin_db.Open()
+
+        if admin_db.IsOpen:
+            level_admin = admin_db.CurrentAccessLevel
+            can_create  = level_admin >= 3  # Author и выше может создавать
+
+            # Дополнительно пробуем реально создать и удалить тестовый документ
+            can_write = False
+            try:
+                test_doc = admin_db.CreateDocument()
+                test_doc.ReplaceItemValue("Form", "TestAccess")
+                test_doc.ReplaceItemValue("TestField", "test")
+                saved = test_doc.Save(True, False)
+                if saved:
+                    can_write = True
+                    test_doc.Remove(True)  # удаляем тестовый документ
+            except Exception:
+                can_write = False
+
+            data["checks"].append({
+                "file":      "admin4.nsf",
+                "level":     level_admin,
+                "text":      ACCESS_LEVELS.get(level_admin, f"Уровень {level_admin}"),
+                "ok":        can_write,
+                "can_write": can_write,
+                "needed":    "Author (3) или выше + право создания"
+            })
+        else:
+            data["checks"].append({
+                "file": "admin4.nsf", "level": 0,
+                "text": "Не удалось открыть файл",
+                "ok": False, "needed": "Author (3)"
+            })
+    except Exception as e:
+        data["checks"].append({
+            "file": "admin4.nsf", "level": -1,
+            "text": f"Ошибка доступа: {e}",
+            "ok": False, "needed": "Author (3)"
+        })
+
+    # ── Итог ─────────────────────────────────────────────────────────────────
+    all_ok = all(c["ok"] for c in data["checks"])
+    data["all_ok"] = all_ok
+    data["summary"] = (
+        "✓ Все права есть — продление будет работать!"
+        if all_ok else
+        "✗ Недостаточно прав для продления сертификата"
+    )
+
+    send({"success": True, "message": "Проверка доступа выполнена", "data": data})
+
+
 def action_check(win32com, params):
     server_name    = params.get("server_name", "")
     user_name      = params.get("user_name", "")
@@ -463,8 +560,9 @@ def main():
     try:
         if action == "check":
             action_check(win32com, params)
+        elif action == "check_access":
+            action_check_access(win32com, params)
         elif action in ("renew", "renew_force"):
-            # renew_force пропускает проверку дубликата
             params["force"] = (action == "renew_force")
             action_renew(win32com, params)
         else:
