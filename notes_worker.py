@@ -239,21 +239,16 @@ def parse_id_file(id_file_path):
 
         counts = Counter(candidates)
 
-        # Берём даты которые встречаются >= 2 раз
-        reliable = {d: c for d, c in counts.items() if c >= 2}
-
-        # Дата истечения сертификата Notes обычно в диапазоне +10..+15 лет
-        # Ищем минимальную дату в этом диапазоне
-        far_future = [d for d in (reliable or counts)
-                      if d.year >= now.year + 10]
+        # Дата истечения сертификата Notes — САМАЯ ПОЗДНЯЯ дата
+        # в диапазоне +10..+15 лет (последний сертификат в цепочке)
+        far_future = [d for d in counts if d.year >= now.year + 10]
 
         if far_future:
-            return datetime(*min(far_future).timetuple()[:3])
+            # Берём МАКСИМАЛЬНУЮ дату из дальнего будущего
+            return datetime(*max(far_future).timetuple()[:3])
 
-        # Fallback — минимальная надёжная или просто минимальная
-        if reliable:
-            return datetime(*min(reliable.keys()).timetuple()[:3])
-        return datetime(*min(candidates).timetuple()[:3])
+        # Fallback — максимальная из всех найденных
+        return datetime(*max(candidates).timetuple()[:3])
 
     except Exception:
         pass
