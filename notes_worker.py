@@ -185,7 +185,7 @@ def parse_id_file(id_file_path):
     Формат Notes TIMEDATE:
       - 8 байт, little-endian: Innards[0] (время) + Innards[1] (дата)
       - Innards[1] = количество дней с 01.01.1900
-      - Дата истечения = самая ранняя будущая дата которая часто встречается
+      - Дата истечения = самая ПОЗДНЯЯ дата которая встречается >= 2 раз
     """
     import struct
     from collections import Counter
@@ -194,35 +194,39 @@ def parse_id_file(id_file_path):
         with open(id_file_path, "rb") as f:
             data = f.read()
 
-        now          = datetime.now()
-        epoch        = datetime(1900, 1, 1)
-        future_limit = datetime(now.year + 35, 12, 31)
-        candidates   = []
+        now   = datetime.now()
+        epoch = datetime(1900, 1, 1)
 
+        # i1 диапазон для дат от сегодня до +40 лет
+        i1_min = (now - epoch).days
+        i1_max = (datetime(now.year + 40, 12, 31) - epoch).days
+
+        candidates = []
         for offset in range(0, len(data) - 8, 1):
             try:
                 i0, i1 = struct.unpack_from('<II', data, offset)
-
-                # Innards[1] = дни с 01.01.1900
-                if 36500 <= i1 <= 80000:   # примерно 2000-2119 годы
+                if i1_min <= i1 <= i1_max:
                     d = epoch + timedelta(days=i1)
-                    if now < d < future_limit:
-                        candidates.append(d.date())
+                    candidates.append(d.date())
             except Exception:
                 continue
 
-        if candidates:
-            counts = Counter(candidates)
-            # Берём самую часто встречающуюся дату среди будущих
-            # (дата истечения обычно записана в файле несколько раз)
-            most_common_date = max(counts, key=lambda d: (counts[d], -d.toordinal()))
-            # Если она встречается хотя бы 2 раза — это надёжный результат
-            if counts[most_common_date] >= 2:
-                return datetime(most_common_date.year,
-                                most_common_date.month,
-                                most_common_date.day)
-            # Иначе берём минимальную будущую дату
-            return datetime(*min(candidates).timetuple()[:3])
+        if not candidates:
+            return None
+
+        counts = Counter(candidates)
+
+        # Оставляем только даты которые встречаются >= 2 раз
+        reliable = {d: c for d, c in counts.items() if c >= 2}
+
+        if reliable:
+            # Берём самую ПОЗДНЮЮ надёжную дату — это дата истечения сертификата
+            best = max(reliable.keys())
+            return datetime(best.year, best.month, best.day)
+
+        # Если ни одна не повторяется — берём максимальную
+        best = max(candidates)
+        return datetime(best.year, best.month, best.day)
 
     except Exception:
         pass
