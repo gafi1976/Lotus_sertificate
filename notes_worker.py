@@ -170,12 +170,12 @@ def get_expiration(doc, id_file_path=""):
     if id_path and os.path.exists(id_path):
         d = parse_id_file(id_path)
         if d:
-            return d.strftime("%Y-%m-%d"), f"IDFile:{id_path}"
+            return d.strftime("%Y-%m-%d"), f"IDFile:{id_path}", auto_found
 
     # ── Метод 2: ClntDate — только как справочная инфо, НЕ как дата истечения──
     # (не возвращаем её как дату истечения — это дата последнего входа!)
 
-    return None, None
+    return None, None, auto_found
 
 
 def parse_id_file(id_file_path):
@@ -230,7 +230,7 @@ def action_check(win32com, params):
         "full_name":  doc.GetItemValue("FullName")[0],
     }
 
-    exp_str, exp_field = get_expiration(doc, id_file_path)
+    exp_str, exp_field, auto_found = get_expiration(doc, id_file_path)
 
     if exp_str:
         data["expiration_date"]  = format_date(exp_str)
@@ -306,7 +306,7 @@ def action_renew(win32com, params):
     }
 
     # Текущая дата
-    exp_str, _ = get_expiration(doc)
+    exp_str, _, _auto = get_expiration(doc, "")
     if exp_str:
         result_data["current_expiration"] = format_date(exp_str)
 
