@@ -337,6 +337,43 @@ def action_check(win32com, params):
     send({"success": True, "message": "Данные получены", "data": data})
 
 
+def check_pending_request(admin_db, user_name):
+    """
+    Проверяет есть ли уже активный запрос на рецертификацию
+    пользователя в admin4.nsf.
+    Возвращает (True, дата_создания) если запрос есть, иначе (False, None).
+    """
+    try:
+        # Перебираем все документы AdminRequest с ProxyAction=78
+        view = admin_db.GetView("($Pending)")
+        if view is None:
+            # Если нет представления — ищем через поиск
+            view = admin_db.GetView("($All)")
+        if view is None:
+            return False, None
+
+        doc = view.GetFirstDocument()
+        while doc is not None:
+            try:
+                # Проверяем тип запроса (78 = Recertify)
+                action = doc.GetItemValue("ProxyAction")
+                names  = doc.GetItemValue("ProxyNameList")
+                if action and str(action[0]).strip() == "78":
+                    if names:
+                        for name in names:
+                            # Сравниваем имена без учёта регистра
+                            if str(name).strip().lower() == user_name.strip().lower():
+                                created = doc.GetItemValue("ProxyCreated")
+                                created_str = str(created[0]) if created and created[0] else "неизвестно"
+                                return True, created_str
+            except Exception:
+                pass
+            doc = view.GetNextDocument(doc)
+    except Exception:
+        pass
+    return False, None
+
+
 def action_renew(win32com, params):
     server_name     = params.get("server_name", "")
     user_name       = params.get("user_name", "")
@@ -367,6 +404,24 @@ def action_renew(win32com, params):
     if not admin_db.IsOpen:
         send({"success": False, "message": "admin4.nsf закрыта — нет прав администратора?", "data": {}})
 
+    # ── Проверка дублирования ─────────────────────────────────────────────────
+    force = params.get("force", False)
+    if not force:
+        already, created_date = check_pending_request(admin_db, user_name)
+        if already:
+            send({
+                "success": False,
+                "message": (
+                    f"⚠️ Запрос на продление уже существует!\n\n"
+                    f"Пользователь : {user_name}\n"
+                    f"Создан       : {created_date}\n\n"
+                    f"Дождитесь обработки AdminP на сервере.\n"
+                    f"Обычно AdminP обрабатывает запросы каждые 5-60 минут."
+                ),
+                "data": {"duplicate": True, "created_date": created_date}
+            })
+
+    # ── Создаём запрос AdminP ─────────────────────────────────────────────────
     req = admin_db.CreateDocument()
     req.ReplaceItemValue("Form",                "AdminRequest")
     req.ReplaceItemValue("ProxyAction",         "78")
@@ -408,6 +463,10 @@ def main():
     try:
         if action == "check":
             action_check(win32com, params)
+        elif action in ("renew", "renew_force"):
+            # renew_force пропускает проверку дубликата
+            params["force"] = (action == "renew_force")
+            action_renew(win32com, params)
         else:
             action_renew(win32com, params)
     except Exception as e:

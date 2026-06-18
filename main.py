@@ -565,6 +565,41 @@ class LotusRenewApp(tk.Tk):
     def _on_result(self, result, action="renew"):
         self._set_busy(False)
 
+        # ── Обработка дубликата ───────────────────────────────────────────────
+        if not result["success"] and result.get("data", {}).get("duplicate"):
+            self._log("─" * 45, "time")
+            self._log("⚠️ ДУБЛИКАТ: " + result["message"].split("\n")[0], "warn")
+            created = result["data"].get("created_date", "")
+            if created:
+                self._log(f"Создан ранее  : {created}", "warn")
+            self._log("─" * 45, "time")
+
+            # Спрашиваем хочет ли пользователь создать повторно
+            answer = messagebox.askyesno(
+                "Запрос уже существует",
+                f"{result['message']}\n\n"
+                f"Создать ещё один запрос принудительно?"
+            )
+            if answer:
+                # Принудительное продление — передаём флаг force=True
+                python32 = self.var_python32.get().strip()
+                server   = self.var_server.get().strip()
+                user     = self.var_user.get().strip()
+                password = self.var_password.get()
+                custom   = self.var_custom_days.get().strip()
+                days     = int(custom) if custom and custom.isdigit() else self.var_days.get()
+                idfile   = self.var_idfile.get().strip()
+
+                self._set_busy(True)
+                self._log("Принудительное продление...", "warn")
+                thread = threading.Thread(
+                    target=self._run_worker,
+                    args=(python32, server, user, password, days, "renew_force", idfile),
+                    daemon=True
+                )
+                thread.start()
+            return
+
         if result["success"]:
             data = result.get("data", {})
             self._log("─" * 45, "time")
