@@ -1,63 +1,139 @@
-# diag.py — диагностика полей документа пользователя
+# diag.py — диагностика ID файла Lotus Notes
 # Запускать через 32-битный Python:
 # C:\Python313-32\python.exe diag.py
 
 import sys
-import win32com.client
+import os
+from datetime import datetime
 
 # ─── НАСТРОЙТЕ ЭТИ ПАРАМЕТРЫ ─────────────────────────────────────────────────
-SERVER_NAME    = "Guli_mail/Guli"   # ← имя вашего сервера
-USER_NAME      = "tech10/Guli"      # ← имя пользователя
-NOTES_PASSWORD = ""                  # ← пароль если есть
-# ──────────────────────────────────────────────────────────────────────────────
+ID_FILE_PATH = r"C:\Program Files (x86)\IBM\Notes\Data\TECH10.ID"
+# ─────────────────────────────────────────────────────────────────────────────
 
-print("=" * 60)
-print("ДИАГНОСТИКА ПОЛЕЙ ПОЛЬЗОВАТЕЛЯ LOTUS NOTES")
-print("=" * 60)
+def try_notes_com(id_file_path):
+    """Пробуем получить дату через Notes COM API напрямую."""
+    print("\n=== Метод 1: Notes COM API ===")
+    try:
+        import win32com.client
+        session = win32com.client.Dispatch("Lotus.NotesSession")
+        session.Initialize("")
 
-try:
-    session = win32com.client.Dispatch("Lotus.NotesSession")
-    session.Initialize(NOTES_PASSWORD)
-    print(f"Сессия открыта: {session.CommonUserName}\n")
-
-    db = session.GetDatabase(SERVER_NAME, "names.nsf")
-    if not db.IsOpen:
-        db.Open()
-    print(f"names.nsf открыта: {db.IsOpen}\n")
-
-    view = db.GetView("($Users)")
-    doc  = view.GetDocumentByKey(USER_NAME, True)
-
-    if doc is None:
-        print(f"ОШИБКА: Пользователь '{USER_NAME}' не найден!")
-        sys.exit(1)
-
-    print(f"Пользователь найден: {doc.GetItemValue('FullName')[0]}\n")
-    print("-" * 60)
-    print(f"{'ИМЯ ПОЛЯ':<35} {'ТИП':>4}  {'ЗНАЧЕНИЕ'}")
-    print("-" * 60)
-
-    # Выводим ВСЕ поля документа
-    items = doc.Items
-    for item in items:
+        # Открываем ID файл через NotesDatabase
         try:
-            name  = item.Name
-            itype = item.Type
-            val   = doc.GetItemValue(name)
-            if val and val[0]:
-                val_str = str(val[0])[:60]
-            else:
-                val_str = "(пусто)"
-            print(f"{name:<35} {itype:>4}  {val_str}")
+            # Метод через GetIDInfo
+            id_info = session.GetEnvironmentString("$ID_FILE", True)
+            print(f"Текущий ID файл из среды: {id_info}")
         except Exception as e:
-            print(f"{item.Name:<35}  ERR  {e}")
+            print(f"GetEnvironmentString: {e}")
 
-    print("-" * 60)
-    print("\nТипы полей Notes:")
-    print("  1 = TEXT        3 = NUMBER    6 = RICHTEXT")
-    print("  7 = DATETIME    8 = NAMES    16 = USERDATA (бинарные)")
+        # Пробуем через NotesName
+        try:
+            name = session.CreateName(session.UserName)
+            print(f"Имя пользователя: {name.Abbreviated}")
+            print(f"Каноническое:     {name.Canonical}")
+        except Exception as e:
+            print(f"CreateName: {e}")
 
-except Exception as e:
-    print(f"ОШИБКА: {e}")
+        # Пробуем получить дату через адресную книгу
+        try:
+            books = session.AddressBooks
+            for book in books:
+                print(f"Адресная книга: Server='{book.Server}' File='{book.FilePath}'")
+        except Exception as e:
+            print(f"AddressBooks: {e}")
+
+    except Exception as e:
+        print(f"COM ошибка: {e}")
+
+
+def read_id_file_raw(id_file_path):
+    """Читаем ID файл как бинарные данные и ищем дату."""
+    print(f"\n=== Метод 2: Бинарный анализ файла ===")
+    print(f"Файл: {id_file_path}")
+
+    if not os.path.exists(id_file_path):
+        print(f"ФАЙЛ НЕ НАЙДЕН: {id_file_path}")
+        return
+
+    with open(id_file_path, "rb") as f:
+        data = f.read()
+
+    print(f"Размер файла: {len(data)} байт")
+    print(f"\nПервые 64 байта (HEX):")
+    print(" ".join(f"{b:02X}" for b in data[:64]))
+
+    print(f"\n--- Поиск дат в диапазоне 2000-2050 ---")
+    found = []
+    for offset in range(len(data) - 4):
+        # Формат 1: 2 байта год big-endian + месяц + день
+        year  = int.from_bytes(data[offset:offset+2], 'big')
+        month = data[offset+2]
+        day   = data[offset+3]
+        if 2000 <= year <= 2050 and 1 <= month <= 12 and 1 <= day <= 31:
+            try:
+                d = datetime(year, month, day)
+                found.append((offset, d, "big-endian"))
+            except Exception:
+                pass
+
+        # Формат 2: 2 байта год little-endian + месяц + день
+        year2 = int.from_bytes(data[offset:offset+2], 'little')
+        if 2000 <= year2 <= 2050 and 1 <= month <= 12 and 1 <= day <= 31:
+            try:
+                d = datetime(year2, month, day)
+                found.append((offset, d, "little-endian"))
+            except Exception:
+                pass
+
+    if found:
+        print(f"Найдено {len(found)} совпадений:")
+        # Показываем уникальные даты
+        unique = {}
+        for offset, d, fmt in found:
+            key = d.strftime("%Y-%m-%d")
+            if key not in unique:
+                unique[key] = (offset, d, fmt)
+        for key, (offset, d, fmt) in sorted(unique.items()):
+            print(f"  offset=0x{offset:04X} ({offset:5d})  дата={d.strftime('%d.%m.%Y')}  формат={fmt}")
+        print(f"\nСамая поздняя дата (вероятно дата истечения):")
+        latest = max(unique.values(), key=lambda x: x[1])
+        print(f"  >>> {latest[1].strftime('%d.%m.%Y')} <<<")
+    else:
+        print("Даты не найдены методом поиска year+month+day")
+
+    print(f"\n--- Поиск строк с годом 20xx ---")
+    # Ищем текстовое представление дат
+    text = data.decode("latin-1", errors="replace")
+    import re
+    matches = re.findall(r'(20\d\d[-/\.]\d\d[-/\.]\d\d|\d\d[-/\.]\d\d[-/\.]20\d\d)', text)
+    if matches:
+        print(f"Найдены текстовые даты: {set(matches)}")
+    else:
+        print("Текстовых дат не найдено")
+
+    print(f"\n--- Все байты вокруг возможных дат ---")
+    # Ищем байты 0x07 0xE9 (2025 в big-endian) или похожее
+    target_years = [2037, 2036, 2035, 2030, 2027, 2026, 2025]
+    for year in target_years:
+        be = year.to_bytes(2, 'big')
+        le = year.to_bytes(2, 'little')
+        for enc, label in [(be, "BE"), (le, "LE")]:
+            pos = 0
+            while True:
+                idx = data.find(enc, pos)
+                if idx == -1:
+                    break
+                context = data[max(0,idx-4):idx+8]
+                print(f"  {year} ({label}) offset=0x{idx:04X}: {' '.join(f'{b:02X}' for b in context)}")
+                pos = idx + 1
+
+
+# ─── Запуск ───────────────────────────────────────────────────────────────────
+print("=" * 60)
+print("ДИАГНОСТИКА ID ФАЙЛА LOTUS NOTES")
+print("=" * 60)
+
+try_notes_com(ID_FILE_PATH)
+read_id_file_raw(ID_FILE_PATH)
 
 input("\nНажмите Enter для выхода...")
