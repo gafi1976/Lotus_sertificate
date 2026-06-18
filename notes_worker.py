@@ -1,5 +1,6 @@
 # notes_worker.py — запускается ТОЛЬКО через 32-битный Python
 # C:\Python313-32\python.exe notes_worker.py
+# VERSION: 2.0
 
 import sys
 import json
@@ -16,6 +17,9 @@ if hasattr(sys.stdin, "reconfigure"):
 
 
 def send(obj):
+    # Добавляем версию и путь к файлу для диагностики
+    obj["_worker_version"] = "2.0"
+    obj["_worker_file"]    = __file__
     sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
     sys.stdout.flush()
     sys.exit(0)

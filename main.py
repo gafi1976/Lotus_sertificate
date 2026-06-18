@@ -568,6 +568,9 @@ class LotusRenewApp(tk.Tk):
         if result["success"]:
             data = result.get("data", {})
             self._log("─" * 45, "time")
+            # Показываем версию воркера для диагностики
+            if "_worker_file" in result:
+                self._log(f"Воркер        : {result['_worker_file']} v{result.get('_worker_version','?')}", "warn")
 
             if action == "check":
                 # ── Результат проверки ────────────────────────────────────────
@@ -624,6 +627,8 @@ class LotusRenewApp(tk.Tk):
         else:
             self._log("─" * 45, "time")
             self._log("ОШИБКА: " + result["message"], "error")
+            if "_worker_file" in result:
+                self._log(f"Воркер: {result['_worker_file']} v{result.get('_worker_version','?')}", "warn")
             self._log("─" * 45, "time")
             messagebox.showerror("Ошибка", result["message"])
 
