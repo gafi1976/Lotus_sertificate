@@ -583,6 +583,8 @@ class LotusRenewApp(tk.Tk):
                 if days_left is not None:
                     self._log(f"Осталось      : {days_left} дней", "info")
                 self._log(f"Статус        : {status_txt}", tag)
+                if "id_file_used" in data:
+                    self._log(f"ID файл       : {data['id_file_used']}", "info")
 
                 # Показываем найденные поля для диагностики если дата не найдена
                 if status == "unknown":

@@ -122,62 +122,55 @@ def get_expiration(doc, id_file_path=""):
     Читаем путь к ID файлу из документа и парсим его бинарные данные.
     """
 
-    # ── Метод 0: используем путь переданный из GUI ────────────────────────────
+    # ── Метод 1: ищем ID файл по имени пользователя автоматически ───────────
     import os
-    if id_file_path and os.path.exists(id_file_path):
-        d = parse_id_file(id_file_path)
-        if d:
-            return d.strftime("%Y-%m-%d"), f"IDFile:{id_file_path}"
 
-    # ── Метод 1: читаем ID файл пользователя напрямую ────────────────────────
+    # Извлекаем короткое имя из CN=tech10/O=Guli → tech10
     try:
-        # Путь к ID файлу берём из поля документа или из стандартного места
-        id_file_path = None
-
-        # Пробуем получить путь из документа
-        for field in ["IDFilePath", "IDFile", "idFilePath"]:
-            try:
-                val = doc.GetItemValue(field)
-                if val and val[0] and str(val[0]).strip():
-                    id_file_path = str(val[0]).strip()
-                    break
-            except Exception:
-                continue
-
-        # Если нет в документе — строим стандартный путь
-        # По скриншоту: c:\Program Files (x86)\IBM\Notes\Data\TECH10.ID
-        if not id_file_path:
-            try:
-                short_name = doc.GetItemValue("ShortName")
-                if short_name and short_name[0]:
-                    name = str(short_name[0]).strip()
-                    # Стандартные пути к Notes Data
-                    import os
-                    data_dirs = [
-                        r"C:\Program Files (x86)\IBM\Notes\Data",
-                        r"C:\Program Files\IBM\Notes\Data",
-                        r"C:\Program Files (x86)\HCL\Notes\Data",
-                        r"C:\Program Files\HCL\Notes\Data",
-                        r"C:\Lotus\Notes\Data",
-                        os.path.expandvars(r"%APPDATA%\IBM\Notes\Data"),
-                        os.path.expandvars(r"%LOCALAPPDATA%\IBM\Notes\Data"),
-                    ]
-                    for data_dir in data_dirs:
-                        candidate = os.path.join(data_dir, f"{name}.ID")
-                        if os.path.exists(candidate):
-                            id_file_path = candidate
-                            break
-            except Exception:
-                pass
-
-        if id_file_path:
-            import os
-            if os.path.exists(id_file_path):
-                d = parse_id_file(id_file_path)
-                if d:
-                    return d.strftime("%Y-%m-%d"), f"IDFile:{id_file_path}"
+        short_name = doc.GetItemValue("ShortName")
+        short_name = str(short_name[0]).strip() if short_name and short_name[0] else ""
     except Exception:
-        pass
+        short_name = ""
+
+    if not short_name:
+        # Парсим из FullName: CN=tech10/O=Guli → tech10
+        try:
+            full = doc.GetItemValue("FullName")[0]
+            parts = str(full).replace("CN=", "").split("/")
+            short_name = parts[0].strip()
+        except Exception:
+            short_name = ""
+
+    # Стандартные папки Notes Data
+    data_dirs = [
+        r"C:\Program Files (x86)\IBM\Notes\Data",
+        r"C:\Program Files\IBM\Notes\Data",
+        r"C:\Program Files (x86)\HCL\Notes\Data",
+        r"C:\Program Files\HCL\Notes\Data",
+        r"C:\Lotus\Notes\Data",
+        r"C:\IBM\Notes\Data",
+        os.path.expandvars(r"%APPDATA%\IBM\Notes\Data"),
+        os.path.expandvars(r"%LOCALAPPDATA%\IBM\Notes\Data"),
+        os.path.expandvars(r"%APPDATA%\HCL\Notes\Data"),
+    ]
+
+    auto_found = None
+    if short_name:
+        for data_dir in data_dirs:
+            for name_variant in [short_name, short_name.upper(), short_name.lower()]:
+                candidate = os.path.join(data_dir, f"{name_variant}.ID")
+                if os.path.exists(candidate):
+                    auto_found = candidate
+                    break
+            if auto_found:
+                break
+
+    # Читаем ID файл (приоритет: вручную указанный → автонайденный)
+    id_path = id_file_path or auto_found
+    if id_path and os.path.exists(id_path):
+        d = parse_id_file(id_path)
+        if d:
+            return d.strftime("%Y-%m-%d"), f"IDFile:{id_path}"
 
     # ── Метод 2: ClntDate — только как справочная инфо, НЕ как дата истечения──
     # (не возвращаем её как дату истечения — это дата последнего входа!)
@@ -242,6 +235,9 @@ def action_check(win32com, params):
     if exp_str:
         data["expiration_date"]  = format_date(exp_str)
         data["expiration_field"] = exp_field
+        # Показываем какой ID файл был использован
+        if "IDFile:" in (exp_field or ""):
+            data["id_file_used"] = exp_field.replace("IDFile:", "")
         days = days_until(exp_str)
         if days is not None:
             data["days_left"] = days
@@ -280,6 +276,9 @@ def action_check(win32com, params):
             "в поле 'ID файл (.ID)' и нажмите '...'\n"
             f"Обычно: C:\\Program Files (x86)\\IBM\\Notes\\Data\\{user_name.split('/')[0].split('=')[-1]}.ID"
         )
+        # Сообщаем какой файл искали автоматически
+        if auto_found is None and short_name:
+            data["status_text"] += f"\n\nФайл {short_name}.ID не найден автоматически"
 
     # Дата последнего входа клиента
     try:
