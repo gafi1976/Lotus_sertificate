@@ -291,12 +291,17 @@ def action_check(win32com, params):
             elif days <= 90:
                 data["status"]      = "warning"
                 data["status_text"] = f"Истекает через {days} дней"
+            elif days <= 365:
+                data["status"]      = "warning"
+                data["status_text"] = f"Истекает через {days} дней (~{days//30} мес.)"
             else:
+                years  = days // 365
+                months = (days % 365) // 30
                 data["status"]      = "ok"
-                data["status_text"] = f"Действителен ещё {days} дней"
+                data["status_text"] = f"Действителен ещё {years} лет {months} мес. ({days} дней)"
         else:
             data["status"]      = "ok"
-            data["status_text"] = f"Действителен"
+            data["status_text"] = "Действителен"
     else:
         # Дата не найдена — показываем подсказку
         data["expiration_date"] = "Не найдена"
