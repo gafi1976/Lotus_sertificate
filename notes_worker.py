@@ -179,13 +179,8 @@ def get_expiration(doc, id_file_path=""):
     except Exception:
         pass
 
-    # ── Метод 2: ClntDate — дата последнего входа клиента ────────────────────
-    try:
-        val = doc.GetItemValue("ClntDate")
-        if val and val[0] and str(val[0]).strip():
-            return str(val[0]), "ClntDate (дата последнего входа)"
-    except Exception:
-        pass
+    # ── Метод 2: ClntDate — только как справочная инфо, НЕ как дата истечения──
+    # (не возвращаем её как дату истечения — это дата последнего входа!)
 
     return None, None
 
@@ -266,23 +261,24 @@ def action_check(win32com, params):
             data["status"]      = "ok"
             data["status_text"] = f"Действителен"
     else:
-        # Дата не найдена — показываем доступную информацию
+        # Дата не найдена — показываем подсказку
         data["expiration_date"] = "Не найдена"
         data["status"]          = "unknown"
 
-        # Показываем ClntDate и $Revisions как справочную информацию
+        # Показываем ClntDate как справочную информацию
         info_lines = []
-        for field in ["ClntDate", "$Revisions", "HTTPPasswordChangeDate"]:
+        for field, label in [("ClntDate", "Последний вход"), ("$Revisions", "Изменён"), ("HTTPPasswordChangeDate", "Смена пароля")]:
             try:
                 val = doc.GetItemValue(field)
                 if val and val[0] and str(val[0]).strip():
-                    info_lines.append(f"{field}: {format_date(str(val[0]))}")
+                    info_lines.append(f"{label}: {format_date(str(val[0]))}")
             except Exception:
                 pass
 
         data["status_text"] = (
-            "Дата истечения сертификата не найдена в документе.\n"
-            + ("\n".join(info_lines) if info_lines else "")
+            "Укажите путь к ID файлу пользователя\n"
+            "в поле 'ID файл (.ID)' и нажмите '...'\n"
+            f"Обычно: C:\\Program Files (x86)\\IBM\\Notes\\Data\\{user_name.split('/')[0].split('=')[-1]}.ID"
         )
 
     # Дата последнего входа клиента
