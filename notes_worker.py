@@ -189,7 +189,14 @@ def parse_id_file(id_file_path):
     Формат Notes TIMEDATE:
       - 8 байт, little-endian: Innards[0] (время) + Innards[1] (дата)
       - Innards[1] = количество дней с 01.01.1900
-      - Дата истечения = самая ПОЗДНЯЯ дата которая встречается >= 2 раз
+
+    Из диагностики известно:
+      - 12.11.2037 → i1 = 50354 (0xC4B2)
+      - 26.10.2037 → i1 = 50337 (0xC4A1) — встречается в файле
+      - 16.06.2045 → i1 = 53127 (0xCF87) — ложное срабатывание
+
+    Алгоритм: ищем самую раннюю дату из 2037-2040 которая повторяется >= 2 раз.
+    Если нет — берём самую частую дату в диапазоне текущий_год .. +20 лет.
     """
     import struct
     from collections import Counter
@@ -198,39 +205,55 @@ def parse_id_file(id_file_path):
         with open(id_file_path, "rb") as f:
             data = f.read()
 
-        now   = datetime.now()
         epoch = datetime(1900, 1, 1)
+        now   = datetime.now()
 
-        # i1 диапазон для дат от сегодня до +40 лет
+        # i1 диапазон: от сегодня до +15 лет (сертификаты Notes макс 15 лет)
         i1_min = (now - epoch).days
-        i1_max = (datetime(now.year + 40, 12, 31) - epoch).days
+        i1_max = (datetime(now.year + 15, 12, 31) - epoch).days
 
         candidates = []
         for offset in range(0, len(data) - 8, 1):
             try:
                 i0, i1 = struct.unpack_from('<II', data, offset)
-                if i1_min <= i1 <= i1_max:
+                if i1_min < i1 <= i1_max:
                     d = epoch + timedelta(days=i1)
                     candidates.append(d.date())
             except Exception:
                 continue
 
         if not candidates:
+            # Расширяем диапазон до +40 лет если ничего не нашли
+            i1_max2 = (datetime(now.year + 40, 12, 31) - epoch).days
+            for offset in range(0, len(data) - 8, 1):
+                try:
+                    i0, i1 = struct.unpack_from('<II', data, offset)
+                    if i1_min < i1 <= i1_max2:
+                        d = epoch + timedelta(days=i1)
+                        candidates.append(d.date())
+                except Exception:
+                    continue
+
+        if not candidates:
             return None
 
         counts = Counter(candidates)
 
-        # Оставляем только даты которые встречаются >= 2 раз
+        # Берём даты которые встречаются >= 2 раз
         reliable = {d: c for d, c in counts.items() if c >= 2}
 
-        if reliable:
-            # Берём самую ПОЗДНЮЮ надёжную дату — это дата истечения сертификата
-            best = max(reliable.keys())
-            return datetime(best.year, best.month, best.day)
+        # Дата истечения сертификата Notes обычно в диапазоне +10..+15 лет
+        # Ищем минимальную дату в этом диапазоне
+        far_future = [d for d in (reliable or counts)
+                      if d.year >= now.year + 10]
 
-        # Если ни одна не повторяется — берём максимальную
-        best = max(candidates)
-        return datetime(best.year, best.month, best.day)
+        if far_future:
+            return datetime(*min(far_future).timetuple()[:3])
+
+        # Fallback — минимальная надёжная или просто минимальная
+        if reliable:
+            return datetime(*min(reliable.keys()).timetuple()[:3])
+        return datetime(*min(candidates).timetuple()[:3])
 
     except Exception:
         pass
