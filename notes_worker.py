@@ -181,33 +181,44 @@ def get_expiration(doc, id_file_path=""):
 def parse_id_file(id_file_path):
     """
     Парсит ID файл Lotus Notes и извлекает дату истечения сертификата.
-    ID файл — бинарный формат, дата хранится в структуре сертификата.
-    Ищем год в диапазоне 2020-2060.
+    Использует Notes TIMEDATE формат (Julian Day Number).
+    Алгоритм: ищем все 8-байтные блоки, интерпретируем как TIMEDATE,
+    берём максимальную дату в диапазоне текущий_год .. текущий_год+30
     """
+    import struct
+
     try:
         with open(id_file_path, "rb") as f:
             data = f.read()
 
-        # Notes хранит дату как 2 байта год (big-endian) + 1 байт месяц + 1 байт день
-        # Ищем самую позднюю валидную дату (это и есть дата истечения)
-        found_dates = []
-        for offset in range(0, len(data) - 4):
+        now = datetime.now()
+        candidates = []
+
+        for offset in range(0, len(data) - 8, 1):
             try:
-                year  = int.from_bytes(data[offset:offset+2], 'big')
-                month = data[offset + 2]
-                day   = data[offset + 3]
-                if 2020 <= year <= 2060 and 1 <= month <= 12 and 1 <= day <= 31:
-                    try:
-                        d = datetime(year, month, day)
-                        found_dates.append(d)
-                    except Exception:
-                        continue
+                i0, i1 = struct.unpack_from('<II', data, offset)
+
+                # Notes TIMEDATE: Innards[1] >> 1 = Julian Day
+                jd = i1 >> 1
+                # Julian Day 2440588 = 1970-01-01
+                if 2440000 <= jd <= 2480000:
+                    days_from_1970 = jd - 2440588
+                    d = datetime(1970, 1, 1) + timedelta(days=days_from_1970)
+                    # Берём только даты в будущем (от сегодня до +30 лет)
+                    if now <= d <= datetime(now.year + 30, 12, 31):
+                        candidates.append(d)
             except Exception:
                 continue
 
-        if found_dates:
-            # Берём самую позднюю дату — это дата истечения сертификата
-            return max(found_dates)
+        if candidates:
+            # Дата истечения — максимальная найденная дата в разумном диапазоне
+            # Берём медиану старших дат (убираем выбросы)
+            candidates.sort()
+            # Берём самую раннюю дату из верхней четверти — это скорее всего дата истечения
+            top = candidates[len(candidates)*3//4:]
+            if top:
+                return min(top)  # минимум из верхней четверти
+            return max(candidates)
 
     except Exception:
         pass
