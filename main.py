@@ -461,10 +461,10 @@ class LotusRenewApp(tk.Tk):
         self.lbl_expdate.config(text=exp, fg="#222222")
 
         days = data.get("days_left")
-        if days_left is not None:
-                    self.lbl_days.config(text=f"{days_left} дней", fg="#222222")
+        if days is not None:
+            self.lbl_days.config(text=f"{days} дней", fg="#222222")
         else:
-                    self.lbl_days.config(text="—", fg="gray")
+            self.lbl_days.config(text="—", fg="gray")
 
         # Последний вход
         last = data.get("last_login", "")
