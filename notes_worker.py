@@ -181,44 +181,48 @@ def get_expiration(doc, id_file_path=""):
 def parse_id_file(id_file_path):
     """
     Парсит ID файл Lotus Notes и извлекает дату истечения сертификата.
-    Использует Notes TIMEDATE формат (Julian Day Number).
-    Алгоритм: ищем все 8-байтные блоки, интерпретируем как TIMEDATE,
-    берём максимальную дату в диапазоне текущий_год .. текущий_год+30
+
+    Формат Notes TIMEDATE:
+      - 8 байт, little-endian: Innards[0] (время) + Innards[1] (дата)
+      - Innards[1] = количество дней с 01.01.1900
+      - Дата истечения = самая ранняя будущая дата которая часто встречается
     """
     import struct
+    from collections import Counter
 
     try:
         with open(id_file_path, "rb") as f:
             data = f.read()
 
-        now = datetime.now()
-        candidates = []
+        now          = datetime.now()
+        epoch        = datetime(1900, 1, 1)
+        future_limit = datetime(now.year + 35, 12, 31)
+        candidates   = []
 
         for offset in range(0, len(data) - 8, 1):
             try:
                 i0, i1 = struct.unpack_from('<II', data, offset)
 
-                # Notes TIMEDATE: Innards[1] >> 1 = Julian Day
-                jd = i1 >> 1
-                # Julian Day 2440588 = 1970-01-01
-                if 2440000 <= jd <= 2480000:
-                    days_from_1970 = jd - 2440588
-                    d = datetime(1970, 1, 1) + timedelta(days=days_from_1970)
-                    # Берём только даты в будущем (от сегодня до +30 лет)
-                    if now <= d <= datetime(now.year + 30, 12, 31):
-                        candidates.append(d)
+                # Innards[1] = дни с 01.01.1900
+                if 36500 <= i1 <= 80000:   # примерно 2000-2119 годы
+                    d = epoch + timedelta(days=i1)
+                    if now < d < future_limit:
+                        candidates.append(d.date())
             except Exception:
                 continue
 
         if candidates:
-            # Дата истечения — максимальная найденная дата в разумном диапазоне
-            # Берём медиану старших дат (убираем выбросы)
-            candidates.sort()
-            # Берём самую раннюю дату из верхней четверти — это скорее всего дата истечения
-            top = candidates[len(candidates)*3//4:]
-            if top:
-                return min(top)  # минимум из верхней четверти
-            return max(candidates)
+            counts = Counter(candidates)
+            # Берём самую часто встречающуюся дату среди будущих
+            # (дата истечения обычно записана в файле несколько раз)
+            most_common_date = max(counts, key=lambda d: (counts[d], -d.toordinal()))
+            # Если она встречается хотя бы 2 раза — это надёжный результат
+            if counts[most_common_date] >= 2:
+                return datetime(most_common_date.year,
+                                most_common_date.month,
+                                most_common_date.day)
+            # Иначе берём минимальную будущую дату
+            return datetime(*min(candidates).timetuple()[:3])
 
     except Exception:
         pass
