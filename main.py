@@ -94,7 +94,7 @@ def find_python32():
 
 # ─── Логика вызова воркера ────────────────────────────────────────────────────
 
-def call_worker(python32_path, server_name, user_name, notes_password, expiration_days=365, action="renew"):
+def call_worker(python32_path, server_name, user_name, notes_password, expiration_days=365, action="renew", id_file_path=""):
     """Запускает notes_worker.py через 32-битный Python и возвращает результат."""
     if not python32_path or not os.path.exists(python32_path):
         return {
@@ -122,6 +122,7 @@ def call_worker(python32_path, server_name, user_name, notes_password, expiratio
         "user_name":       user_name,
         "notes_password":  notes_password,
         "expiration_days": expiration_days,
+        "id_file_path":    id_file_path,
     }, ensure_ascii=False)
 
     try:
@@ -199,11 +200,13 @@ class LotusRenewApp(tk.Tk):
         self.var_python32.set(self.config_data.get("python32_path", ""))
         self.var_server.set(self.config_data.get("server_name", ""))
         self.var_user.set(self.config_data.get("user_name", ""))
+        self.var_idfile.set(self.config_data.get("id_file_path", ""))
 
     def _save_config(self):
         self.config_data["python32_path"] = self.var_python32.get().strip()
         self.config_data["server_name"]   = self.var_server.get().strip()
         self.config_data["user_name"]     = self.var_user.get().strip()
+        self.config_data["id_file_path"]  = self.var_idfile.get().strip()
         save_config(self.config_data)
 
     def _auto_find_python32(self):
@@ -286,6 +289,17 @@ class LotusRenewApp(tk.Tk):
             form, text="Показать пароль", variable=self.show_pass,
             command=self._toggle_password, font=("Segoe UI", 8), fg="gray"
         ).grid(row=5, column=1, sticky="w", padx=(8, 0))
+
+        # ID файл
+        tk.Label(form, text="ID файл (.ID):", anchor="w", font=("Segoe UI", 9)).grid(row=6, column=0, sticky="w", pady=4)
+        self.var_idfile = tk.StringVar()
+        tk.Entry(form, textvariable=self.var_idfile, width=32, font=("Segoe UI", 9)).grid(row=6, column=1, sticky="ew", padx=(8, 0), pady=4)
+        tk.Button(
+            form, text="...", width=3,
+            command=self._browse_idfile,
+            font=("Segoe UI", 9), relief="flat", bg="#e0e0e0", cursor="hand2"
+        ).grid(row=6, column=2, padx=(4, 0))
+        tk.Label(form, text=r'например: C:\IBM\Notes\Data\TECH10.ID', fg="gray", font=("Segoe UI", 8)).grid(row=7, column=1, sticky="w", padx=(8, 0))
 
         form.columnconfigure(1, weight=1)
 
@@ -382,6 +396,17 @@ class LotusRenewApp(tk.Tk):
 
     # ── Вспомогательные методы ────────────────────────────────────────────────
 
+    def _browse_idfile(self):
+        path = filedialog.askopenfilename(
+            title="Выберите ID файл пользователя",
+            filetypes=[("Notes ID файл", "*.id *.ID"), ("Все файлы", "*.*")],
+            initialdir=r"C:\Program Files (x86)\IBM\Notes\Data"
+        )
+        if path:
+            self.var_idfile.set(path)
+            self._save_config()
+            self._log(f"ID файл выбран: {path}", "success")
+
     def _browse_python32(self):
         path = filedialog.askopenfilename(
             title="Выберите python.exe (32-bit)",
@@ -442,9 +467,13 @@ class LotusRenewApp(tk.Tk):
         self._log(f"Пользователь : {user}", "info")
         self._log(f"Сервер       : {server}", "info")
 
+        idfile = self.var_idfile.get().strip()
+        if idfile:
+            self._log(f"ID файл      : {idfile}", "info")
+
         thread = threading.Thread(
             target=self._run_worker,
-            args=(python32, server, user, password, 365, "check"),
+            args=(python32, server, user, password, 365, "check", idfile),
             daemon=True
         )
         thread.start()
@@ -524,13 +553,13 @@ class LotusRenewApp(tk.Tk):
 
         thread = threading.Thread(
             target=self._run_worker,
-            args=(python32, server, user, password, days, "renew"),
+            args=(python32, server, user, password, days, "renew", self.var_idfile.get().strip()),
             daemon=True
         )
         thread.start()
 
-    def _run_worker(self, python32, server, user, password, days, action="renew"):
-        result = call_worker(python32, server, user, password, days, action)
+    def _run_worker(self, python32, server, user, password, days, action="renew", idfile=""):
+        result = call_worker(python32, server, user, password, days, action, idfile)
         self.after(0, self._on_result, result, action)
 
     def _on_result(self, result, action="renew"):

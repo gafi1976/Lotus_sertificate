@@ -115,40 +115,71 @@ def find_user_doc(db, user_name):
 
 # ─── Получение даты сертификата ───────────────────────────────────────────────
 
-def get_expiration(doc):
+def get_expiration(doc, id_file_path=""):
     """
-    Из диагностики известно что в документе есть:
-      - Certificate    (тип 1280) — бинарные данные сертификата
-      - ClntDate       (тип 1024) — 2022-06-29 21:56:57+00:00
-      - $Revisions     (тип 1024) — дата изменения
-      - HTTPPasswordChangeDate (тип 1024)
-
-    Дата истечения хранится ВНУТРИ бинарного поля Certificate.
-    Читаем его и парсим байты.
+    Дата истечения хранится в ID файле пользователя (TECH10.ID),
+    а не в документе names.nsf.
+    Читаем путь к ID файлу из документа и парсим его бинарные данные.
     """
 
-    # Метод 1: парсим байты поля Certificate
+    # ── Метод 0: используем путь переданный из GUI ────────────────────────────
+    import os
+    if id_file_path and os.path.exists(id_file_path):
+        d = parse_id_file(id_file_path)
+        if d:
+            return d.strftime("%Y-%m-%d"), f"IDFile:{id_file_path}"
+
+    # ── Метод 1: читаем ID файл пользователя напрямую ────────────────────────
     try:
-        item = doc.GetFirstItem("Certificate")
-        if item:
-            # Получаем сырое значение через Text
-            raw_text = item.Text
-            if raw_text:
-                # Убираем пробелы и переносы — это HEX строка
-                hex_str = raw_text.replace(" ", "").replace("\n", "").replace("\r", "")
-                # Заменяем G → 0 (в выводе диагностики были буквы G вместо цифр — это артефакт отображения)
-                hex_str = hex_str.replace("G", "0")
-                try:
-                    raw_bytes = bytes.fromhex(hex_str)
-                    d = parse_cert_bytes(raw_bytes)
-                    if d:
-                        return d.strftime("%Y-%m-%d"), "Certificate[binary]"
-                except Exception:
-                    pass
+        # Путь к ID файлу берём из поля документа или из стандартного места
+        id_file_path = None
+
+        # Пробуем получить путь из документа
+        for field in ["IDFilePath", "IDFile", "idFilePath"]:
+            try:
+                val = doc.GetItemValue(field)
+                if val and val[0] and str(val[0]).strip():
+                    id_file_path = str(val[0]).strip()
+                    break
+            except Exception:
+                continue
+
+        # Если нет в документе — строим стандартный путь
+        # По скриншоту: c:\Program Files (x86)\IBM\Notes\Data\TECH10.ID
+        if not id_file_path:
+            try:
+                short_name = doc.GetItemValue("ShortName")
+                if short_name and short_name[0]:
+                    name = str(short_name[0]).strip()
+                    # Стандартные пути к Notes Data
+                    import os
+                    data_dirs = [
+                        r"C:\Program Files (x86)\IBM\Notes\Data",
+                        r"C:\Program Files\IBM\Notes\Data",
+                        r"C:\Program Files (x86)\HCL\Notes\Data",
+                        r"C:\Program Files\HCL\Notes\Data",
+                        r"C:\Lotus\Notes\Data",
+                        os.path.expandvars(r"%APPDATA%\IBM\Notes\Data"),
+                        os.path.expandvars(r"%LOCALAPPDATA%\IBM\Notes\Data"),
+                    ]
+                    for data_dir in data_dirs:
+                        candidate = os.path.join(data_dir, f"{name}.ID")
+                        if os.path.exists(candidate):
+                            id_file_path = candidate
+                            break
+            except Exception:
+                pass
+
+        if id_file_path:
+            import os
+            if os.path.exists(id_file_path):
+                d = parse_id_file(id_file_path)
+                if d:
+                    return d.strftime("%Y-%m-%d"), f"IDFile:{id_file_path}"
     except Exception:
         pass
 
-    # Метод 2: ClntDate — дата последнего клиента (не идеально но хоть что-то)
+    # ── Метод 2: ClntDate — дата последнего входа клиента ────────────────────
     try:
         val = doc.GetItemValue("ClntDate")
         if val and val[0] and str(val[0]).strip():
@@ -159,12 +190,49 @@ def get_expiration(doc):
     return None, None
 
 
+def parse_id_file(id_file_path):
+    """
+    Парсит ID файл Lotus Notes и извлекает дату истечения сертификата.
+    ID файл — бинарный формат, дата хранится в структуре сертификата.
+    Ищем год в диапазоне 2020-2060.
+    """
+    try:
+        with open(id_file_path, "rb") as f:
+            data = f.read()
+
+        # Notes хранит дату как 2 байта год (big-endian) + 1 байт месяц + 1 байт день
+        # Ищем самую позднюю валидную дату (это и есть дата истечения)
+        found_dates = []
+        for offset in range(0, len(data) - 4):
+            try:
+                year  = int.from_bytes(data[offset:offset+2], 'big')
+                month = data[offset + 2]
+                day   = data[offset + 3]
+                if 2020 <= year <= 2060 and 1 <= month <= 12 and 1 <= day <= 31:
+                    try:
+                        d = datetime(year, month, day)
+                        found_dates.append(d)
+                    except Exception:
+                        continue
+            except Exception:
+                continue
+
+        if found_dates:
+            # Берём самую позднюю дату — это дата истечения сертификата
+            return max(found_dates)
+
+    except Exception:
+        pass
+    return None
+
+
 # ─── Действия ─────────────────────────────────────────────────────────────────
 
 def action_check(win32com, params):
     server_name    = params.get("server_name", "")
     user_name      = params.get("user_name", "")
     notes_password = params.get("notes_password", "")
+    id_file_path   = params.get("id_file_path", "")
 
     session, db = get_session_and_db(win32com, server_name, notes_password)
     doc = find_user_doc(db, user_name)
@@ -174,7 +242,7 @@ def action_check(win32com, params):
         "full_name":  doc.GetItemValue("FullName")[0],
     }
 
-    exp_str, exp_field = get_expiration(doc)
+    exp_str, exp_field = get_expiration(doc, id_file_path)
 
     if exp_str:
         data["expiration_date"]  = format_date(exp_str)
